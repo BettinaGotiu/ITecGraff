@@ -1,3 +1,10 @@
+import org.gradle.api.file.Directory
+import org.gradle.api.tasks.Delete
+
+plugins {
+    // (nimic aici; modulele își declară propriile plugin-uri)
+}
+
 allprojects {
     repositories {
         google()
@@ -5,6 +12,7 @@ allprojects {
     }
 }
 
+// păstrează structura ta custom de build dir
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")
