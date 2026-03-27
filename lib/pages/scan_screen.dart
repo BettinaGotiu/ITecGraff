@@ -25,7 +25,10 @@ class _ScanScreenState extends State<ScanScreen> {
           final code = capture.barcodes.first.rawValue;
           if (code != null && code.isNotEmpty) {
             _handled = true;
-            Navigator.pop(context, code); // return posterId / roomId
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Success: $code')));
+            Navigator.pop(context, code); // return posterId/roomId
           }
         },
       ),

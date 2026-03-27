@@ -1,0 +1,27 @@
+name: ar_flutter_plugin
+description: Flutter Plugin for creating (collaborative) AR experiences.
+version: 0.7.3+local
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  permission_handler: ^12.0.1
+  vector_math: ^2.1.4
+  json_annotation: ^4.8.1
+  geolocator: ^10.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.carius.lars.ar_flutter_plugin
+        pluginClass: ArFlutterPlugin
+      ios:
+        pluginClass: ArFlutterPlugin

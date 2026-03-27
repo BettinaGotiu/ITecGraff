@@ -31,6 +31,8 @@ android {
         release {
             // semnare debug temporar; înlocuiește cu semnarea ta de release când vrei
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
