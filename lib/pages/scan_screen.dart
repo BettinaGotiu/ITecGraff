@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
 import 'package:flutter/material.dart';
+import 'game_room_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stările ecranului (camera AR rămâne activă în toate stările)
@@ -466,56 +467,159 @@ class _ScanScreenState extends State<ScanScreen>
 
   Widget _popupOverlay() {
     return Container(
-      color: Colors.black54,
+      color: Colors.black87,
       child: Center(
-        child: Card(
-          margin: const EdgeInsets.all(24),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.check_circle,
-                    color: Colors.green, size: 56),
-                const SizedBox(height: 14),
-                const Text(
-                  'Poster detectat!',
-                  style: TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.bold),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Success badge ───────────────────────────────────────────
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.green.withOpacity(0.15),
+                  border: Border.all(color: Colors.greenAccent, width: 2),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  _detectedName,
-                  style: const TextStyle(
-                      fontSize: 16, color: Colors.black54),
+                child: const Icon(Icons.check, color: Colors.greenAccent, size: 36),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Poster Detectat!',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
                 ),
-                const SizedBox(height: 24),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Singura opțiune: deschide canvas-ul direct pe acest ecran
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.brush),
-                      label: const Text('Mergi la Canvas'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: _startDrawingHere,
-                    ),
-                    const SizedBox(height: 10),
-                    TextButton(
-                      onPressed: _resetToScanning,
-                      child: const Text('Anulează'),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _detectedName,
+                style: const TextStyle(
+                  color: Color(0xFF7B3EFF),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // ── Poster preview ──────────────────────────────────────────
+              Container(
+                height: 200,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFF7B3EFF),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF7B3EFF).withOpacity(0.4),
+                      blurRadius: 20,
+                      spreadRadius: 2,
                     ),
                   ],
                 ),
-              ],
-            ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.asset(
+                    'assets/posters/$_detectedName.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: Colors.grey[850],
+                      child: const Icon(
+                        Icons.image_not_supported,
+                        color: Colors.white38,
+                        size: 48,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
+
+              // ── Action buttons ──────────────────────────────────────────
+              const Text(
+                'Alege o opțiune:',
+                style: TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+
+              // "Go to AR Canvas" button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.view_in_ar, size: 22),
+                  label: const Text(
+                    'Mergi la Canvas AR',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF7B3EFF),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 6,
+                    shadowColor: const Color(0xFF7B3EFF),
+                  ),
+                  onPressed: _startDrawingHere,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // "Go to Game Room" button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.sports_esports, size: 22),
+                  label: const Text(
+                    'Mergi la Game Room',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1A1A2E),
+                    foregroundColor: Colors.cyanAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: const BorderSide(
+                        color: Colors.cyanAccent,
+                        width: 1.5,
+                      ),
+                    ),
+                    elevation: 4,
+                  ),
+                  onPressed: _goToGameRoom,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Cancel
+              TextButton(
+                onPressed: _resetToScanning,
+                child: const Text(
+                  'Anulează',
+                  style: TextStyle(color: Colors.white38, fontSize: 14),
+                ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Navigate to the collaborative Game Room for the detected poster.
+  void _goToGameRoom() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GameRoomScreen(posterId: _detectedName),
       ),
     );
   }
