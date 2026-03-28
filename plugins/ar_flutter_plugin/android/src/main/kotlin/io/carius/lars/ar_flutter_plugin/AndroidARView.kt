@@ -106,35 +106,71 @@ internal class AndroidARView(
                             try {
                                 val name = call.argument<String>("name")!!
                                 val path = call.argument<String>("path")!!
-                                val physicalWidth = call.argument<Double>("physicalWidth")?.toFloat() // Can be null if size omitted
+                                val physicalWidth = call.argument<Double>("physicalWidth")?.toFloat()
 
-                                val config = arSceneView.session!!.config
-                                var db = config.augmentedImageDatabase
-                                if (db == null) {
-                                    db = AugmentedImageDatabase(arSceneView.session)
-                                }
+                                val session = arSceneView.session!!
+                                val config = session.config
+                                val db = config.augmentedImageDatabase ?: AugmentedImageDatabase(session)
 
                                 val loader = FlutterInjector.instance().flutterLoader()
                                 val key = loader.getLookupKeyForAsset(path)
-                                val inputStream = viewContext.assets.open(key)
-                                val bitmap = BitmapFactory.decodeStream(inputStream)
+                                val bitmap = decodeSampledBitmap(viewContext, key, 512)
 
-                                if (physicalWidth != null && physicalWidth > 0f) {
-                                    db.addImage(name, bitmap, physicalWidth)
-                                } else {
-                                    db.addImage(name, bitmap)
+                                if (bitmap != null) {
+                                    if (physicalWidth != null && physicalWidth > 0f) {
+                                        db.addImage(name, bitmap, physicalWidth)
+                                    } else {
+                                        db.addImage(name, bitmap)
+                                    }
                                 }
 
                                 config.augmentedImageDatabase = db
-                                
-                                // AugmentedImageDatabase changes require the session to be paused
-                                arSceneView.pause()
-                                arSceneView.session!!.configure(config)
-                                arSceneView.resume()
-                                
+                                // Session.configure() is lightweight and does NOT require pause/resume
+                                session.configure(config)
+
                                 result.success(null)
                             } catch (e: Exception) {
                                 result.error("e", "Failed to add reference image: ${e.message}", e.stackTrace)
+                            }
+                        }
+                        "addAllReferenceImages" -> {
+                            try {
+                                @Suppress("UNCHECKED_CAST")
+                                val imageList = call.argument<List<Map<String, Any?>>>("images")
+                                    ?: throw IllegalArgumentException("images list is required")
+
+                                val session = arSceneView.session
+                                    ?: throw IllegalStateException("AR session is not ready yet")
+
+                                val db = AugmentedImageDatabase(session)
+                                val loader = FlutterInjector.instance().flutterLoader()
+
+                                for (imgData in imageList) {
+                                    val name = imgData["name"] as? String ?: continue
+                                    val path = imgData["path"] as? String ?: continue
+                                    val physicalWidth = (imgData["physicalWidth"] as? Number)?.toFloat()
+                                    try {
+                                        val key = loader.getLookupKeyForAsset(path)
+                                        val bitmap = decodeSampledBitmap(viewContext, key, 512)
+                                        if (bitmap != null) {
+                                            if (physicalWidth != null && physicalWidth > 0f) {
+                                                db.addImage(name, bitmap, physicalWidth)
+                                            } else {
+                                                db.addImage(name, bitmap)
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Skipping reference image '$name': ${e.message}")
+                                    }
+                                }
+
+                                val config = session.config
+                                config.augmentedImageDatabase = db
+                                session.configure(config)
+
+                                result.success(null)
+                            } catch (e: Exception) {
+                                result.error("addAllReferenceImages", "Failed: ${e.message}", null)
                             }
                         }
                         "raycast" -> {
@@ -988,6 +1024,27 @@ internal class AndroidARView(
                 }
             })
         }
+    }
+
+    /** Decode a bitmap from a Flutter asset key, downsampling to at most [maxDim] pixels on each
+     *  side in order to keep memory usage reasonable for large poster images. */
+    private fun decodeSampledBitmap(context: Context, assetKey: String, maxDim: Int): Bitmap? {
+        // First pass: read dimensions only
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.assets.open(assetKey).use { BitmapFactory.decodeStream(it, null, boundsOpts) }
+
+        var w = boundsOpts.outWidth
+        var h = boundsOpts.outHeight
+        var sampleSize = 1
+        while (w / 2 >= maxDim || h / 2 >= maxDim) {
+            sampleSize *= 2
+            w /= 2
+            h /= 2
+        }
+
+        // Second pass: decode at reduced resolution
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        return context.assets.open(assetKey).use { BitmapFactory.decodeStream(it, null, decodeOpts) }
     }
 
 }

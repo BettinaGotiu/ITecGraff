@@ -58,25 +58,26 @@ class _ARMainScreenState extends State<ARMainScreen> {
   }
 
   Future<void> _setupImageTracking() async {
-    // 1. INCARCAM IMAGINEA IN SISTEMUL AR
-    // IMPORTANT: Numele fisierului trebuie sa existe in pubspec.yaml si in folderul assets/images
-    await arSessionManager?.addReferenceImage(
-      name: "afis12",
-      path: "assets/images/afis12.png",
-      physicalWidth:
-          0.4, // Estimare: posterul real are 40 cm latime in viata reala
-    );
+    // Cream lista cu toate cele 13 postere din assets/posters
+    final List<Map<String, dynamic>> posterImages = [
+      for (int i = 1; i <= 13; i++)
+        {
+          'name': 'afis$i',
+          'path': 'assets/posters/afis$i.png',
+          'physicalWidth': 0.3, // ~30 cm – ajustați dacă cunoașteți dimensiunea reală
+        }
+    ];
 
-    // 2. ASCULTAM PENTRU MOMENTUL IN CARE CAMERA DETECTEAZA POSTERUL
+    // Incarcam TOATE posterele intr-un singur apel (eficient – o singura configurare ARCore)
+    await arSessionManager?.addAllReferenceImages(posterImages);
+
+    // Ascultam pentru momentul in care camera detecteaza oricare din postere
     arAnchorManager?.onAnchorDownloaded =
         (Map<String, dynamic> serializedAnchor) {
           final anchor = ARAnchor.fromJson(serializedAnchor);
 
           if (anchor is ARImageAnchor && _currentState == AppState.scanning) {
-            // Daca a gasit o imagine si noi o cautam, verificam daca e afis12
-            if (anchor.referenceImageName == "afis12") {
-              _showRoomPopup(anchor, "Camera Afișului 12");
-            }
+            _showRoomPopup(anchor, 'Camera "${anchor.referenceImageName}"');
           }
           return anchor;
         };
