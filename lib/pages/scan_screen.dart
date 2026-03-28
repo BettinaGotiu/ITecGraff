@@ -65,9 +65,9 @@ class _ScanScreenState extends State<ScanScreen>
   /// Proporție A4 (√2 ≈ 1.414) – fallback dacă ARCore nu raportează înălțimea
   static const double _kA4AspectRatio = 1.414;
 
-  /// Marginea (în pixeli) față de marginea ecranului dincolo de care canvas-ul
-  /// este considerat „în afara câmpului vizual" și este ascuns.
-  static const double _kOffscreenMargin = 200.0;
+  /// Factor de acoperire: canvas-ul este cu atât mai mare decât posterul,
+  /// compensând variațiile de FOV între dispozitive (1.0 = exact, 1.1 = 10% mai mare).
+  static const double _kCanvasCoverage = 1.1;
 
   /// Dimensiunile colțurilor decorative ale cadrului de scanare.
   static const double _kCornerBracketSize = 28.0;
@@ -142,8 +142,17 @@ class _ScanScreenState extends State<ScanScreen>
     // Activăm callback-ul DUPĂ ce toate imaginile sunt înregistrate
     _anchorMgr?.onAnchorDownloaded = (Map<String, dynamic> raw) {
       final anchor = ARAnchor.fromJson(raw);
-      if (anchor is ARImageAnchor && _state == _AppState.scanning) {
-        _onPosterDetected(anchor);
+      if (anchor is ARImageAnchor) {
+        if (_state == _AppState.scanning) {
+          // Detecție inițială
+          _onPosterDetected(anchor);
+        } else if (_state == _AppState.drawing &&
+            anchor.referenceImageName == _detectedName &&
+            mounted) {
+          // Re-detecție în modul desen: actualizăm ancora pentru tracking mai precis.
+          // Folosim setState direct (nu _onPosterDetected) ca să nu restartăm timer-ul.
+          setState(() => _anchor = anchor);
+        }
       }
       return anchor;
     };
@@ -192,7 +201,12 @@ class _ScanScreenState extends State<ScanScreen>
 
     // Obținem pose-ul curent al ancorei direct din ARCore (tracking live)
     final anchorPose = await _sessionMgr!.getPose(_anchor!);
-    if (anchorPose == null || !mounted) return;
+    if (anchorPose == null) {
+      // ARCore a pierdut ancora – ascundem canvas-ul imediat
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
+    if (!mounted) return;
 
     final camPose = await _sessionMgr!.getCameraPose();
     if (camPose == null || !mounted) return;
@@ -219,22 +233,26 @@ class _ScanScreenState extends State<ScanScreen>
     final screenY =
         sz.height / 2 - (diffCam.y / depth) / _kTanHalfFovV * (sz.height / 2);
 
+    // Scala cu factor de acoperire: canvas-ul este _kCanvasCoverage ori mai mare decât
+    // proiecția teoretică a posterului, compensând variațiile de FOV.
+    // Formula: scale × canvasW = physW × sz.width × coverage / (2 × depth × tanHalfFov)
+    // ceea ce înseamnă că lățimea canvas-ului = lățimea proiectată a posterului × coverage.
+    final scale =
+        (sz.width * _kCanvasCoverage / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
+            .clamp(0.05, 8.0)
+            .toDouble();
+
     // Ascundem canvas-ul dacă posterul a ieșit complet din câmpul vizual
-    if (screenX < -_kOffscreenMargin ||
-        screenX > sz.width + _kOffscreenMargin ||
-        screenY < -_kOffscreenMargin ||
-        screenY > sz.height + _kOffscreenMargin) {
+    // (verificăm dacă întreg canvas-ul e în afara ecranului)
+    final halfW = _canvasW * scale / 2;
+    final halfH = _canvasH * scale / 2;
+    if (screenX + halfW < 0 ||
+        screenX - halfW > sz.width ||
+        screenY + halfH < 0 ||
+        screenY - halfH > sz.height) {
       if (mounted) setState(() => _posterVisible = false);
       return;
     }
-
-    // Scala corectă: canvas-ul acoperă exact dimensiunea fizică a posterului.
-    // physW se simplifică (canvasW = physW * kPxPerMeter), deci:
-    //   scale = screenWidth / (2 * depth * tanHalfFovH * kPxPerMeter)
-    final scale =
-        (sz.width / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
-            .clamp(0.05, 8.0)
-            .toDouble();
 
     if (mounted) {
       setState(() {

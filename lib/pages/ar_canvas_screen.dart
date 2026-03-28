@@ -51,7 +51,10 @@ class _ARCanvasScreenState extends State<ARCanvasScreen>
   static const double _kPxPerMeter = 1000.0;
   static const double _kDefaultPosterWidth = 0.30; // lățime fizică implicită (metri)
   static const double _kA4AspectRatio = 1.414;
-  static const double _kOffscreenMargin = 200.0;
+
+  /// Factor de acoperire: canvas-ul este cu atât mai mare decât posterul,
+  /// compensând variațiile de FOV între dispozitive (1.0 = exact, 1.1 = 10% mai mare).
+  static const double _kCanvasCoverage = 1.1;
 
   // ── Animație scanare ──────────────────────────────────────────────────────
   late AnimationController _scanAnimCtrl;
@@ -118,14 +121,23 @@ class _ARCanvasScreenState extends State<ARCanvasScreen>
 
     _anchorMgr?.onAnchorDownloaded = (Map<String, dynamic> raw) {
       final anchor = ARAnchor.fromJson(raw);
-      if (anchor is ARImageAnchor && !_posterDetected) {
-        final matchesRoom = anchor.referenceImageName == widget.roomId;
-        // Dacă roomId nu are formatul "afis$i" (e.g. e un ID Firebase), acceptăm
-        // primul poster recunoscut ca fallback.
-        final roomIdIsNotPosterName =
-            !RegExp(r'^afis\d+$').hasMatch(widget.roomId);
-        if (matchesRoom || roomIdIsNotPosterName) {
-          _onPosterDetected(anchor);
+      if (anchor is ARImageAnchor) {
+        if (!_posterDetected) {
+          // Detecție inițială
+          final matchesRoom = anchor.referenceImageName == widget.roomId;
+          // Dacă roomId nu are formatul "afis$i" (e.g. e un ID Firebase), acceptăm
+          // primul poster recunoscut ca fallback.
+          final roomIdIsNotPosterName =
+              !RegExp(r'^afis\d+$').hasMatch(widget.roomId);
+          if (matchesRoom || roomIdIsNotPosterName) {
+            _onPosterDetected(anchor);
+          }
+        } else if (_anchor != null &&
+            anchor.referenceImageName == _anchor!.referenceImageName &&
+            mounted) {
+          // Re-detecție în modul desen: actualizăm ancora pentru tracking mai precis.
+          // Folosim setState direct (nu _onPosterDetected) ca să nu restartăm timer-ul.
+          setState(() => _anchor = anchor);
         }
       }
       return anchor;
@@ -165,7 +177,12 @@ class _ARCanvasScreenState extends State<ARCanvasScreen>
     if (_anchor == null || _sessionMgr == null || !mounted) return;
 
     final anchorPose = await _sessionMgr!.getPose(_anchor!);
-    if (anchorPose == null || !mounted) return;
+    if (anchorPose == null) {
+      // ARCore a pierdut ancora – ascundem canvas-ul imediat
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
+    if (!mounted) return;
 
     final camPose = await _sessionMgr!.getCameraPose();
     if (camPose == null || !mounted) return;
@@ -192,20 +209,26 @@ class _ARCanvasScreenState extends State<ARCanvasScreen>
     final screenY =
         sz.height / 2 - (diffCam.y / depth) / _kTanHalfFovV * (sz.height / 2);
 
+    // Scala cu factor de acoperire: canvas-ul este _kCanvasCoverage ori mai mare decât
+    // proiecția teoretică a posterului, compensând variațiile de FOV între dispozitive.
+    // Formula: scale × canvasW = physW × sz.width × coverage / (2 × depth × tanHalfFov)
+    // ceea ce înseamnă că lățimea canvas-ului = lățimea proiectată a posterului × coverage.
+    final scale =
+        (sz.width * _kCanvasCoverage / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
+            .clamp(0.05, 8.0)
+            .toDouble();
+
     // Ascundem canvas-ul dacă posterul a ieșit complet din câmpul vizual
-    if (screenX < -_kOffscreenMargin ||
-        screenX > sz.width + _kOffscreenMargin ||
-        screenY < -_kOffscreenMargin ||
-        screenY > sz.height + _kOffscreenMargin) {
+    // (verificăm dacă întreg canvas-ul e în afara ecranului)
+    final halfW = _canvasW * scale / 2;
+    final halfH = _canvasH * scale / 2;
+    if (screenX + halfW < 0 ||
+        screenX - halfW > sz.width ||
+        screenY + halfH < 0 ||
+        screenY - halfH > sz.height) {
       if (mounted) setState(() => _posterVisible = false);
       return;
     }
-
-    // Scala canvas-ului astfel încât să acopere exact dimensiunea fizică a posterului
-    final scale =
-        (sz.width / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
-            .clamp(0.05, 8.0)
-            .toDouble();
 
     if (mounted) {
       setState(() {
