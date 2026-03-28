@@ -7,10 +7,9 @@ import 'package:ar_flutter_plugin/managers/ar_location_manager.dart';
 import 'package:ar_flutter_plugin/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
 import 'package:flutter/material.dart';
-import 'package:vector_math/vector_math_64.dart' as vector;
 
 class ARCanvasScreen extends StatefulWidget {
-  final String roomId; // Primim ID-ul posterului din ecranul anterior
+  final String roomId; // ID-ul posterului (ex: "afis1", "afis2", ...)
 
   const ARCanvasScreen({Key? key, required this.roomId}) : super(key: key);
 
@@ -18,45 +17,216 @@ class ARCanvasScreen extends StatefulWidget {
   State<ARCanvasScreen> createState() => _ARCanvasScreenState();
 }
 
-class _ARCanvasScreenState extends State<ARCanvasScreen> {
-  ARSessionManager? arSessionManager;
+class _ARCanvasScreenState extends State<ARCanvasScreen>
+    with SingleTickerProviderStateMixin {
+  // ── Manageri AR ──────────────────────────────────────────────────────────
+  ARSessionManager? _sessionMgr;
+  ARObjectManager? _objectMgr;
+  ARAnchorManager? _anchorMgr;
 
-  // Variabile pentru desenul 2D
-  List<List<Offset>> _lines = [];
+  // ── Ancora detecatată ─────────────────────────────────────────────────────
+  ARImageAnchor? _anchor;
+  bool _posterDetected = false;
+  bool _posterVisible = false;
+
+  // ── Canvas de desen ───────────────────────────────────────────────────────
+  final List<List<Offset>> _lines = [];
   List<Offset> _currentLine = [];
 
-  // Controlează dacă am plasat deja chenarul în spațiul AR
-  bool _isPosterLocked = false;
+  double _cx = 0;
+  double _cy = 0;
+  double _scale = 1.0;
 
-  // Variabile matematice pentru iluzia 3D (Floating Anchor)
-  vector.Vector3? _posterWorldPosition;
-  double _posterScreenX = 0.0;
-  double _posterScreenY = 0.0;
-  double _scaleFactor = 1.0;
+  double _canvasW = 300.0;
+  double _canvasH = 420.0;
 
-  Timer? _arTrackingTimer;
+  Timer? _trackingTimer;
 
-  // Dimensiunea virtuală a zonei în care poți desena (proporția posterului)
-  // Dacă posterul din viața reală are alt format (ex: e mai lat decât înalt), inversează aceste valori.
-  final double canvasWidth = 280;
-  final double canvasHeight = 400;
+  // Tangenta semi-unghiului de câmp vizual (FOV) pentru o cameră mobilă tipică.
+  // FOV orizontal ≈ 65°  →  tan(32.5°) ≈ 0.637
+  // FOV vertical   ≈ 50°  →  tan(25°)   ≈ 0.466
+  static const double _kTanHalfFovH = 0.637;
+  static const double _kTanHalfFovV = 0.466;
+
+  static const double _kPxPerMeter = 1000.0;
+  static const double _kDefaultPosterWidth = 0.30; // lățime fizică implicită (metri)
+  static const double _kA4AspectRatio = 1.414;
+  static const double _kOffscreenMargin = 200.0;
+
+  // ── Animație scanare ──────────────────────────────────────────────────────
+  late AnimationController _scanAnimCtrl;
+  late Animation<double> _scanAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _scanAnimCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _scanAnim = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _scanAnimCtrl, curve: Curves.easeInOut),
+    );
+  }
 
   @override
   void dispose() {
-    _arTrackingTimer?.cancel();
-    arSessionManager?.dispose();
+    _trackingTimer?.cancel();
+    _sessionMgr?.dispose();
+    _scanAnimCtrl.dispose();
     super.dispose();
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  void onARViewCreated(
+    ARSessionManager sessionManager,
+    ARObjectManager objectManager,
+    ARAnchorManager anchorManager,
+    ARLocationManager locationManager,
+  ) {
+    _sessionMgr = sessionManager;
+    _objectMgr = objectManager;
+    _anchorMgr = anchorManager;
+
+    _sessionMgr!.onInitialize(
+      showAnimatedGuide: false,
+      showFeaturePoints: false,
+      showPlanes: false,
+      showWorldOrigin: false,
+      handleTaps: false,
+      handlePans: false,
+      handleRotation: false,
+    );
+    _objectMgr!.onInitialize();
+    _loadPoster();
+  }
+
+  // ── Încărcăm posterul corespunzător acestui room și așteptăm detecția ────
+  Future<void> _loadPoster() async {
+    // Încărcăm toate posterele ca să detectăm oricare dintre ele;
+    // vom reacționa doar la cel care corespunde roomId-ului curent.
+    final images = [
+      for (int i = 1; i <= 13; i++)
+        {
+          'name': 'afis$i',
+          'path': 'assets/posters/afis$i.png',
+          'physicalWidth': _kDefaultPosterWidth,
+        }
+    ];
+
+    await _sessionMgr?.addAllReferenceImages(images);
+
+    _anchorMgr?.onAnchorDownloaded = (Map<String, dynamic> raw) {
+      final anchor = ARAnchor.fromJson(raw);
+      if (anchor is ARImageAnchor && !_posterDetected) {
+        final matchesRoom = anchor.referenceImageName == widget.roomId;
+        // Dacă roomId nu are formatul "afis$i" (e.g. e un ID Firebase), acceptăm
+        // primul poster recunoscut ca fallback.
+        final roomIdIsNotPosterName =
+            !RegExp(r'^afis\d+$').hasMatch(widget.roomId);
+        if (matchesRoom || roomIdIsNotPosterName) {
+          _onPosterDetected(anchor);
+        }
+      }
+      return anchor;
+    };
+  }
+
+  // ── Posterul a fost detectat – inițializăm canvas-ul ────────────────────
+  void _onPosterDetected(ARImageAnchor anchor) {
+    final physW = anchor.physicalSize.x > 0
+        ? anchor.physicalSize.x
+        : _kDefaultPosterWidth;
+    final physH = anchor.physicalSize.y > 0
+        ? anchor.physicalSize.y
+        : physW * _kA4AspectRatio;
+    _canvasW = (physW * _kPxPerMeter).clamp(150.0, 600.0).toDouble();
+    _canvasH = (physH * _kPxPerMeter).clamp(150.0, 800.0).toDouble();
+
+    final sz = MediaQuery.of(context).size;
+    setState(() {
+      _anchor = anchor;
+      _posterDetected = true;
+      _posterVisible = false;
+      _cx = sz.width / 2;
+      _cy = sz.height / 2;
+      _scale = 1.0;
+    });
+
+    // Pornim timer-ul care urmărește ancora în timp real (~30 FPS)
+    _trackingTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (_) => _updateCanvas(),
+    );
+  }
+
+  // ── Actualizăm poziția/scala canvas-ului folosind pose-ul live al ancorei ─
+  Future<void> _updateCanvas() async {
+    if (_anchor == null || _sessionMgr == null || !mounted) return;
+
+    final anchorPose = await _sessionMgr!.getPose(_anchor!);
+    if (anchorPose == null || !mounted) return;
+
+    final camPose = await _sessionMgr!.getCameraPose();
+    if (camPose == null || !mounted) return;
+
+    final anchorPos = anchorPose.getTranslation();
+    final camPos = camPose.getTranslation();
+    final camRot = camPose.getRotation();
+
+    // Vectorul cameră → ancoră, transformat în spațiul camerei
+    final diff = anchorPos - camPos;
+    final diffCam = camRot.transposed() * diff;
+
+    if (diffCam.z >= 0) {
+      // Ancora e în spatele camerei – ascundem canvas-ul
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
+
+    final depth = -diffCam.z;
+    final sz = MediaQuery.of(context).size;
+
+    final screenX =
+        sz.width / 2 + (diffCam.x / depth) / _kTanHalfFovH * (sz.width / 2);
+    final screenY =
+        sz.height / 2 - (diffCam.y / depth) / _kTanHalfFovV * (sz.height / 2);
+
+    // Ascundem canvas-ul dacă posterul a ieșit complet din câmpul vizual
+    if (screenX < -_kOffscreenMargin ||
+        screenX > sz.width + _kOffscreenMargin ||
+        screenY < -_kOffscreenMargin ||
+        screenY > sz.height + _kOffscreenMargin) {
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
+
+    // Scala canvas-ului astfel încât să acopere exact dimensiunea fizică a posterului
+    final scale =
+        (sz.width / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
+            .clamp(0.05, 8.0)
+            .toDouble();
+
+    if (mounted) {
+      setState(() {
+        _cx = screenX;
+        _cy = screenY;
+        _scale = scale;
+        _posterVisible = true;
+      });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Graffiti: ${widget.roomId}'),
         actions: [
-          // Buton pentru a șterge desenul curent și a o lua de la capăt
           IconButton(
-            icon: const Icon(Icons.clear),
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Șterge desenul',
             onPressed: () => setState(() {
               _lines.clear();
               _currentLine.clear();
@@ -66,193 +236,164 @@ class _ARCanvasScreenState extends State<ARCanvasScreen> {
       ),
       body: Stack(
         children: [
-          // 1. FUNDALUL VIDEO AR
-          // Folosim camera pluginului fără să-i cerem să mai caute planuri (fără triunghiuri albe)
+          // 1. FUNDALUL VIDEO AR (camera activă permanent)
           ARView(
             onARViewCreated: onARViewCreated,
             planeDetectionConfig: PlaneDetectionConfig.none,
           ),
 
-          // 2. CHENARUL DE DESEN (Apare doar DUPĂ ce ai apăsat FIXEAZĂ POSTERUL)
-          // Acest bloc se va mișca pe ecran ca să compenseze pașii tăi în lumea reală
-          if (_isPosterLocked)
-            Positioned(
-              left: _posterScreenX - ((canvasWidth * _scaleFactor) / 2),
-              top: _posterScreenY - ((canvasHeight * _scaleFactor) / 2),
-              child: Transform.scale(
-                scale: _scaleFactor,
-                child: Container(
-                  width: canvasWidth,
-                  height: canvasHeight,
-                  decoration: BoxDecoration(
-                    // Un chenar ușor ca să știi până unde ai voie să desenezi
-                    border: Border.all(color: Colors.pinkAccent, width: 3),
-                    color: Colors.white.withOpacity(
-                      0.05,
-                    ), // Tentă albă transparentă
-                  ),
-                  // ClipRect "taie" desenul dacă încerci să ieși cu degetul din chenar!
-                  child: ClipRect(
-                    child: GestureDetector(
-                      // Logica clasică de desen (Pan)
-                      onPanStart: (details) => setState(
-                        () => _currentLine = [details.localPosition],
-                      ),
-                      onPanUpdate: (details) => setState(
-                        () => _currentLine.add(details.localPosition),
-                      ),
-                      onPanEnd: (details) => setState(() {
-                        _lines.add(List.from(_currentLine));
-                        _currentLine.clear();
-                      }),
-                      // Randăm liniile folosind CustomPainter
-                      child: CustomPaint(
-                        painter: _GraffitiPainter(
-                          lines: _lines,
-                          currentLine: _currentLine,
-                        ),
-                        size: Size(canvasWidth, canvasHeight),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          // 2. CHENARUL DE DESEN – apare DOAR când posterul e detectat și vizibil
+          if (_posterDetected && _posterVisible) _buildCanvas(),
 
-          // 3. ECRANUL DE INIȚIALIZARE
-          if (!_isPosterLocked)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                color: Colors.black54,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      "Privește spre doza/posterul tău real\npână îl încadrezi pe centrul ecranului.\nApoi apasă butonul pentru a-i bloca poziția!",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                    const SizedBox(height: 15),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 40,
-                          vertical: 15,
-                        ),
-                      ),
-                      onPressed: _forceLockPosterToCamera,
-                      child: const Text(
-                        "FIXEAZĂ POSTERUL",
-                        style: TextStyle(fontSize: 16),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          // 3. UI SUPRAPUS
+          _buildOverlay(),
         ],
       ),
     );
   }
 
-  void onARViewCreated(
-    ARSessionManager sessionManager,
-    ARObjectManager objectManager,
-    ARAnchorManager anchorManager,
-    ARLocationManager locationManager,
-  ) {
-    arSessionManager = sessionManager;
-
-    // Inițializăm mediul 3D cât mai curat posibil
-    arSessionManager!.onInitialize(
-      showAnimatedGuide: false,
-      showFeaturePoints: false,
-      showPlanes: false,
-      showWorldOrigin: false,
-      handleTaps: false,
+  // ── Canvas 2D ancorat pe poster ──────────────────────────────────────────
+  Widget _buildCanvas() {
+    return Positioned(
+      left: _cx - _canvasW * _scale / 2,
+      top: _cy - _canvasH * _scale / 2,
+      child: Transform.scale(
+        scale: _scale,
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: _canvasW,
+          height: _canvasH,
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.pinkAccent, width: 3),
+              color: Colors.white.withOpacity(0.06),
+            ),
+            child: ClipRect(
+              child: GestureDetector(
+                onPanStart: (d) =>
+                    setState(() => _currentLine = [d.localPosition]),
+                onPanUpdate: (d) =>
+                    setState(() => _currentLine.add(d.localPosition)),
+                onPanEnd: (_) => setState(() {
+                  if (_currentLine.isNotEmpty) {
+                    _lines.add(List.from(_currentLine));
+                  }
+                  _currentLine.clear();
+                }),
+                child: CustomPaint(
+                  painter: _GraffitiPainter(
+                    lines: _lines,
+                    currentLine: _currentLine,
+                  ),
+                  size: Size(_canvasW, _canvasH),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
-  // Funcția apelată când apeși pe "FIXEAZĂ POSTERUL"
-  Future<void> _forceLockPosterToCamera() async {
-    // Obținem unde se află telefonul în spațiu în milisecunda asta
-    var cameraPose = await arSessionManager!.getCameraPose();
-    if (cameraPose == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Așteaptă 1-2 secunde să se inițializeze ARCore și mai apasă o dată.',
+  // ── UI suprapus ──────────────────────────────────────────────────────────
+  Widget _buildOverlay() {
+    if (!_posterDetected) {
+      // Ecran de scanare – așteptăm detecția posterului
+      return _scanningOverlay();
+    }
+    // Modul desen – banner de avertizare dacă posterul nu mai e vizibil
+    if (!_posterVisible) {
+      return SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.85),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_off, color: Colors.white, size: 16),
+                SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Posterul nu este vizibil – îndreaptă camera spre el',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
-      return;
     }
-
-    // Extragem poziția camerei și cum e înclinată (rotația)
-    vector.Vector3 camPos = cameraPose.getTranslation();
-    vector.Matrix3 camRot = cameraPose.getRotation();
-
-    // Creăm un punct matematic la EXACT 0.6 metri (60 cm) în fața camerei!
-    vector.Vector3 forwardVector = vector.Vector3(0.0, 0.0, -0.6);
-
-    // Convertim punctul ăsta ca să fie absolut (raportat la centrul lumii, nu doar la cameră)
-    _posterWorldPosition = camPos + (camRot * forwardVector);
-
-    setState(() {
-      _isPosterLocked = true;
-    });
-
-    // Chenarul apare inițial fix pe mijlocul ecranului
-    final size = MediaQuery.of(context).size;
-    _posterScreenX = size.width / 2;
-    _posterScreenY = size.height / 2;
-
-    // Pornim un Timer care se execută de 30 de ori pe secundă (30 FPS)
-    // El se ocupă să citească dacă te-ai mișcat și să mute desenul
-    _arTrackingTimer = Timer.periodic(const Duration(milliseconds: 33), (
-      timer,
-    ) {
-      _updatePosterPositionOnScreen();
-    });
+    return const SizedBox.shrink();
   }
 
-  // MAGIA AR HIBRIDĂ: Funcția care mută desenul pe ecran ca să pară că stă în spațiu
-  Future<void> _updatePosterPositionOnScreen() async {
-    if (_posterWorldPosition == null || arSessionManager == null || !mounted)
-      return;
-
-    var cameraPose = await arSessionManager!.getCameraPose();
-    if (cameraPose == null) return;
-
-    vector.Vector3 camPos = cameraPose.getTranslation();
-
-    // 1. Calculăm distanța reală (în metri) dintre telefonul tău și "ancora" din aer
-    double distanceInMeters = camPos.distanceTo(_posterWorldPosition!);
-
-    // 2. Calculăm scala. Dacă ești la 0.6 metri distanță, scala e 1.0 (mărime normală).
-    // Dacă te dai mai în spate (ex. 1.2 metri), scala devine 0.5 (desenul se face mic).
-    double newScale = 0.6 / (distanceInMeters == 0 ? 0.001 : distanceInMeters);
-    newScale = newScale.clamp(0.2, 3.0); // Împiedicăm mărimile extreme
-
-    // 3. Calculăm cu câți metri a deviat telefonul pe lățime/înălțime
-    double deltaX = _posterWorldPosition!.x - camPos.x;
-    double deltaY = _posterWorldPosition!.y - camPos.y;
-
-    final size = MediaQuery.of(context).size;
-
-    // 4. Convertim acea deviație din metri în pixeli pe ecranul tău
-    // Multiplicatorul (1200) simulează field-of-view-ul camerei.
-    double screenX = (size.width / 2) + (deltaX * 1200);
-    double screenY = (size.height / 2) - (deltaY * 1200);
-
-    // Salvăm noile coordonate ca interfața Flutter să se redeseneze instant
-    setState(() {
-      _posterScreenX = screenX;
-      _posterScreenY = screenY;
-      _scaleFactor = newScale;
-    });
+  Widget _scanningOverlay() {
+    return Stack(
+      children: [
+        // Cadru de scanare animat
+        Center(
+          child: AnimatedBuilder(
+            animation: _scanAnim,
+            builder: (context, child) {
+              return Container(
+                width: 230,
+                height: 300,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Colors.white.withOpacity(_scanAnim.value),
+                    width: 2.5,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              );
+            },
+          ),
+        ),
+        // Banner informativ
+        Positioned(
+          bottom: 48,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.65),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedBuilder(
+                    animation: _scanAnim,
+                    builder: (_, child) =>
+                        Opacity(opacity: _scanAnim.value, child: child),
+                    child: const Icon(Icons.crop_free,
+                        color: Colors.white70, size: 26),
+                  ),
+                  const SizedBox(width: 10),
+                  const Flexible(
+                    child: Text(
+                      'Se scanează... Îndreaptă camera spre poster',
+                      style: TextStyle(color: Colors.white, fontSize: 15),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
