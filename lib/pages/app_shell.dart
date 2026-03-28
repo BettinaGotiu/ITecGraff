@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'canvas_screen.dart';
+import 'ar_canvas_screen.dart'; // Folosim noul ecran AR
 import 'home_screen.dart';
 import 'friends_screen.dart';
 import 'settings_screen.dart';
@@ -17,9 +17,22 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Aici se inițializează ecranele
     final pages = [
-      HomeScreen(onPosterSelected: (id) => setState(() => _lastPosterId = id)),
-      CanvasScreen(initialPosterId: _lastPosterId),
+      HomeScreen(
+        onPosterSelected: (id) {
+          setState(() {
+            _lastPosterId = id;
+            _index = 1; // Trecem automat la tab-ul de Canvas după ce a dat Join
+          });
+        },
+      ),
+      // Dacă avem un poster ID, deschidem AR, altfel arătăm un mesaj
+      _lastPosterId != null
+          ? ARCanvasScreen(roomId: _lastPosterId!)
+          : const Center(
+              child: Text("Scanează un poster prima dată din Home."),
+            ),
       const FriendsScreen(),
       const SettingsScreen(),
     ];
@@ -33,7 +46,7 @@ class _AppShellState extends State<AppShell> {
           NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
           NavigationDestination(
             icon: Icon(Icons.brush_outlined),
-            label: 'Canvas',
+            label: 'AR Canvas',
           ),
           NavigationDestination(
             icon: Icon(Icons.group_outlined),

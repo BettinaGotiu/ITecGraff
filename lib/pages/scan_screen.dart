@@ -80,22 +80,60 @@ class _ScanScreenState extends State<ScanScreen> {
         !_modelReady ||
         _controller == null ||
         !_controller!.value.isInitialized ||
-        _busy)
+        _busy) {
       return;
+    }
+
     setState(() => _busy = true);
+
     try {
       final file = await _controller!.takePicture();
       final bytes = await File(file.path).readAsBytes();
       final match = await recognizer.match(bytes, threshold: 0.75);
+
       if (!mounted) return;
 
       if (match != null) {
         final numOnly = match.posterId.replaceAll(RegExp(r'[^0-9]'), '');
-        final label = 'you are joining canvas $numOnly';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(label)));
-        Navigator.pop(context, match.posterId); // ex: 'afis3'
+        final roomName = match.posterId;
+
+        // Oprim camera pentru a nu continua să ia poze în timp ce apare pop-up-ul
+        _controller?.pausePreview();
+
+        // Arătăm Pop-up-ul de Join
+        final join = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: const Text("Poster detectat!"),
+              content: Text('Vrei să te alături camerei "$roomName"?'),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('Cancel'),
+                  onPressed: () {
+                    Navigator.of(context).pop(false);
+                  },
+                ),
+                ElevatedButton(
+                  child: const Text('Join'),
+                  onPressed: () {
+                    Navigator.of(context).pop(true);
+                  },
+                ),
+              ],
+            );
+          },
+        );
+
+        if (join == true) {
+          // Utilizatorul a dat Join.
+          // Returnăm ID-ul posterului înapoi către HomeScreen (sau unde e chemat ScanScreen)
+          Navigator.pop(context, match.posterId);
+        } else {
+          // A dat Cancel, repornim preview-ul camerei pentru a scana din nou
+          _controller?.resumePreview();
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
