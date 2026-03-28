@@ -86,6 +86,23 @@ class ARSessionManager {
     }
   }
 
+  /// Returns the camera's projection matrix (column-major, 16 elements).
+  ///
+  /// Elements [0] and [5] can be used to derive the tangent of the half
+  /// field-of-view angles:
+  ///   tanHalfFovH = 1.0 / matrix[0]
+  ///   tanHalfFovV = 1.0 / matrix[5]
+  Future<List<double>?> getCameraProjectionMatrix() async {
+    try {
+      final raw = await _channel
+          .invokeMethod<List<dynamic>>('getCameraProjectionMatrix', {});
+      return raw?.map((e) => (e as num).toDouble()).toList();
+    } catch (e) {
+      print('Error caught: ' + e.toString());
+      return null;
+    }
+  }
+
   Future<Matrix4?> getPose(ARAnchor anchor) async {
     try {
       if (anchor.name.isEmpty) {

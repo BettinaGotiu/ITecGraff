@@ -47,6 +47,10 @@ class _ScanScreenState extends State<ScanScreen>
   /// Vizibilitate poster: canvas apare doar când posterul este în câmpul vizual
   bool _posterVisible = false;
 
+  /// Dimensiunile fizice ale posterului (stocate separat față de canvas)
+  double _physW = 0.30;
+  double _physH = 0.30 * _kA4AspectRatio;
+
   /// Dimensiunile canvas-ului în pixeli virtuali (derivate din dimensiunea fizică a posterului)
   double _canvasW = 300.0;
   double _canvasH = 420.0;
@@ -56,18 +60,18 @@ class _ScanScreenState extends State<ScanScreen>
 
   Timer? _trackingTimer;
 
-  // Tangenta semi-unghiului de câmp vizual (FOV) pentru o cameră mobilă tipică.
-  // FOV orizontal ≈ 65°  →  tan(32.5°) ≈ 0.637
-  // FOV vertical   ≈ 50°  →  tan(25°)   ≈ 0.466
-  static const double _kTanHalfFovH = 0.637;
-  static const double _kTanHalfFovV = 0.466;
+  // ── Câmpul vizual (FOV) – valori dinamice din matricea de proiecție ───────
+  // Valori implicite pentru modul portret: FOV orizontal ≈ 50°, vertical ≈ 65°
+  double _tanHalfFovH = 0.466; // tan(25°)   – portret: direcție orizontală mai îngustă
+  double _tanHalfFovV = 0.637; // tan(32.5°) – portret: direcție verticală mai largă
+  bool _fovInitialized = false;
 
   /// Proporție A4 (√2 ≈ 1.414) – fallback dacă ARCore nu raportează înălțimea
   static const double _kA4AspectRatio = 1.414;
 
-  /// Factor de acoperire: canvas-ul este cu atât mai mare decât posterul,
-  /// compensând variațiile de FOV între dispozitive (1.0 = exact, 1.1 = 10% mai mare).
-  static const double _kCanvasCoverage = 1.1;
+  /// Factor de acoperire: canvas-ul depășește ușor posterul, compensând
+  /// inexactitățile de FOV (1.15 = 15% mai mare decât proiecția calculată).
+  static const double _kCanvasCoverage = 1.15;
 
   /// Dimensiunile colțurilor decorative ale cadrului de scanare.
   static const double _kCornerBracketSize = 28.0;
@@ -177,8 +181,15 @@ class _ScanScreenState extends State<ScanScreen>
         _anchor!.physicalSize.x > 0 ? _anchor!.physicalSize.x : 0.30;
     final physH =
         _anchor!.physicalSize.y > 0 ? _anchor!.physicalSize.y : physW * _kA4AspectRatio;
-    _canvasW = (physW * _kPxPerMeter).clamp(150.0, 600.0).toDouble();
-    _canvasH = (physH * _kPxPerMeter).clamp(150.0, 800.0).toDouble();
+
+    // Stocăm dimensiunile fizice separat – sunt necesare pentru formula de scală
+    // corectă chiar și când canvas-ul e limitat de clamp.
+    _physW = physW;
+    _physH = physH;
+
+    // Limita superioară ridicată asigură rezoluție bună pentru postere mari.
+    _canvasW = (physW * _kPxPerMeter).clamp(150.0, 1500.0).toDouble();
+    _canvasH = (physH * _kPxPerMeter).clamp(150.0, 2000.0).toDouble();
 
     final sz = MediaQuery.of(context).size;
     setState(() {
@@ -195,9 +206,28 @@ class _ScanScreenState extends State<ScanScreen>
     );
   }
 
+  // ── Inițializăm FOV-ul din matricea de proiecție reală a camerei ────────
+  Future<void> _initFov() async {
+    final proj = await _sessionMgr?.getCameraProjectionMatrix();
+    if (proj != null && proj.length >= 6 && proj[0] != 0 && proj[5] != 0) {
+      final h = 1.0 / proj[0].abs();
+      final v = 1.0 / proj[5].abs();
+      if (h > 0.1 && h < 5.0 && v > 0.1 && v < 5.0 && mounted) {
+        setState(() {
+          _tanHalfFovH = h;
+          _tanHalfFovV = v;
+          _fovInitialized = true;
+        });
+      }
+    }
+  }
+
   // ── Actualizăm poziția/scala canvas-ului folosind pose-ul live al ancorei ─
   Future<void> _updateCanvas() async {
     if (_anchor == null || _sessionMgr == null || !mounted) return;
+
+    // Inițializăm FOV din cameră la primul frame disponibil
+    if (!_fovInitialized) await _initFov();
 
     // Obținem pose-ul curent al ancorei direct din ARCore (tracking live)
     final anchorPose = await _sessionMgr!.getPose(_anchor!);
@@ -229,17 +259,18 @@ class _ScanScreenState extends State<ScanScreen>
     final sz = MediaQuery.of(context).size;
 
     final screenX =
-        sz.width / 2 + (diffCam.x / depth) / _kTanHalfFovH * (sz.width / 2);
+        sz.width / 2 + (diffCam.x / depth) / _tanHalfFovH * (sz.width / 2);
     final screenY =
-        sz.height / 2 - (diffCam.y / depth) / _kTanHalfFovV * (sz.height / 2);
+        sz.height / 2 - (diffCam.y / depth) / _tanHalfFovV * (sz.height / 2);
 
-    // Scala cu factor de acoperire: canvas-ul este _kCanvasCoverage ori mai mare decât
-    // proiecția teoretică a posterului, compensând variațiile de FOV.
-    // Formula: scale × canvasW = physW × sz.width × coverage / (2 × depth × tanHalfFov)
-    // ceea ce înseamnă că lățimea canvas-ului = lățimea proiectată a posterului × coverage.
+    // Scala corectă: face ca lățimea canvas-ului să acopere lățimea proiectată
+    // a posterului × factorul de acoperire.
+    // Folosim _physW (dimensiunea fizică reală) și _canvasW (poate fi limitat de clamp),
+    // astfel formula rămâne corectă indiferent de rezoluția canvas-ului.
     final scale =
-        (sz.width * _kCanvasCoverage / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
-            .clamp(0.05, 8.0)
+        (_physW * sz.width * _kCanvasCoverage /
+                (2.0 * depth * _tanHalfFovH * _canvasW))
+            .clamp(0.05, 10.0)
             .toDouble();
 
     // Ascundem canvas-ul dacă posterul a ieșit complet din câmpul vizual
