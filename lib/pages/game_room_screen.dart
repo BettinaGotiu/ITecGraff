@@ -1,14 +1,16 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-// IMPORTĂ FIȘIERUL TĂU STROKE.DART AICI:
-import '../models/stroke.dart'; // Ajustează calea dacă e nevoie
-import '../services/socket_service.dart'; // Asigură-te că folosești SocketService creat anterior
+import '../services/socket_service.dart';
+import '../models/stroke.dart';
+import '../widgets/drawing_canvas.dart';
+import '../widgets/toolbar_widget.dart';
+import '../widgets/player_info_widget.dart';
 
 class GameRoomScreen extends StatefulWidget {
   final String posterId;
   final String imagePath;
+
   const GameRoomScreen({
     Key? key,
     required this.posterId,
@@ -20,25 +22,29 @@ class GameRoomScreen extends StatefulWidget {
 }
 
 class _GameRoomScreenState extends State<GameRoomScreen> {
-  final SocketService _socketService = SocketService();
+  final SocketService sm = SocketService();
 
-  late String currentUserId;
-  String currentTeamId = "";
+  String currentUserId = 'anonymous';
+  String currentTeamId = 'pink';
 
-  List<DrawPoint> localStrokes = [];
-  List<DrawPoint> remoteStrokes = [];
+  // State for drawing tools
+  double currentBrushSize = 5.0;
+  String currentColor = "#FF4081"; // Default pink
+  bool isEraser = false;
+
+  // State for Game Data
+  int playerCount = 1;
+  List<DrawPoint> remotePoints = [];
+  List<DrawPoint> localPoints = [];
   List<DrawPoint> batchQueue = [];
-
-  double currentBrushSize = 10.0;
-  String currentColor = "#FF0000";
 
   @override
   void initState() {
     super.initState();
-    _initializeUserAndSocket();
+    _initializeGameRoom();
   }
 
-  Future<void> _initializeUserAndSocket() async {
+  Future<void> _initializeGameRoom() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       currentUserId = user.uid;
@@ -47,138 +53,138 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
           .doc(user.uid)
           .get();
       if (doc.exists) {
-        setState(() => currentTeamId = doc.get('teamId'));
+        currentTeamId = doc.get('teamId') ?? 'pink';
       }
-
-      // Înlocuiește 'joinPoster' cu metoda existentă 'connectAndJoin'
-      _socketService.connectAndJoin(
-        currentUserId,
-        currentTeamId,
-        widget.posterId,
-      );
-
-      // Înlocuiește 'onDraw' cu ascultarea stream-ului 'drawUpdates'
-      _socketService.drawUpdates.listen((data) {
-        List strokesData = data['strokes'];
-        setState(() {
-          remoteStrokes.addAll(strokesData.map((s) => DrawPoint.fromJson(s)));
-        });
-      });
     }
+
+    sm.connectAndJoin(currentUserId, currentTeamId, widget.posterId);
+
+    // Listen for new players
+    sm.playerJoined.listen((data) {
+      if (mounted) setState(() => playerCount++);
+    });
+
+    // Listen for incoming strokes
+    sm.drawUpdates.listen((data) {
+      if (!mounted) return;
+      final incomingBatch = StrokeBatch.fromJson(
+        Map<String, dynamic>.from(data),
+      );
+      setState(() {
+        remotePoints.addAll(incomingBatch.strokes);
+      });
+    });
+
+    // Listen for game end
+    sm.gameResults.listen((data) {
+      if (!mounted) return;
+      _showGameResultDialog(data);
+    });
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
-    RenderBox box = context.findRenderObject() as RenderBox;
-    Offset localPosition = box.globalToLocal(details.globalPosition);
-
-    DrawPoint point = DrawPoint(
-      x: localPosition.dx,
-      y: localPosition.dy,
-      brushSize: currentBrushSize,
-      color: currentColor,
-    );
-
+  void _onStrokeDrawn(DrawPoint point) {
     setState(() {
-      localStrokes.add(point);
+      localPoints.add(point);
       batchQueue.add(point);
     });
 
-    if (batchQueue.length >= 10) _sendBatch();
+    if (batchQueue.length >= 10) {
+      _sendBatch();
+    }
   }
 
-  void _onPanEnd(DragEndDetails details) => _sendBatch();
+  void _onStrokeEnded() {
+    _sendBatch();
+  }
 
   void _sendBatch() {
     if (batchQueue.isEmpty) return;
-    _socketService.sendDrawBatch(
+    sm.sendDrawBatch(
       widget.posterId,
       currentUserId,
       currentTeamId,
-      batchQueue.map((s) => s.toJson()).toList(),
+      batchQueue.map((p) => p.toJson()).toList(),
     );
     batchQueue.clear();
+  }
+
+  void _showGameResultDialog(Map<String, dynamic> result) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text("Game Over!"),
+        content: Text(
+          "Winner: ${result['winnerTeam']}\nCoverage: ${result['coverage']}%\nXP: ${result['xp'][currentUserId] ?? 0}",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.popUntil(context, (route) => route.isFirst),
+            child: const Text("Exit"),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   void dispose() {
     _sendBatch();
-    _socketService.leaveRoom(widget.posterId, currentUserId);
+    sm.leaveRoom(widget.posterId, currentUserId);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('2D Game Room')),
+      backgroundColor: Colors.grey[100], // Clean modern background
+      appBar: AppBar(
+        title: Text('Graff Room: ${widget.posterId}'),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        actions: [PlayerInfoWidget(playerCount: playerCount)],
+      ),
       body: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.circle, color: Colors.red),
-                onPressed: () => currentColor = "#FF0000",
-              ),
-              IconButton(
-                icon: const Icon(Icons.circle, color: Colors.blue),
-                onPressed: () => currentColor = "#0000FF",
-              ),
-              Slider(
-                value: currentBrushSize,
-                min: 2,
-                max: 20,
-                onChanged: (v) => setState(() => currentBrushSize = v),
-              ),
-            ],
+          // The Toolbar at the top
+          ToolbarWidget(
+            currentColor: isEraser ? "#00000000" : currentColor,
+            currentBrushSize: currentBrushSize,
+            isEraser: isEraser,
+            onColorSelected: (color) => setState(() {
+              currentColor = color;
+              isEraser = false;
+            }),
+            onBrushSizeChanged: (size) =>
+                setState(() => currentBrushSize = size),
+            onEraserToggled: () => setState(() => isEraser = true),
           ),
+
+          const SizedBox(height: 20),
+
+          // The Framed Poster Canvas
           Expanded(
-            child: GestureDetector(
-              onPanUpdate: _onPanUpdate,
-              onPanEnd: _onPanEnd,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: Image.asset(widget.imagePath, fit: BoxFit.contain),
-                  ),
-                  CustomPaint(
-                    painter: DrawingPainter(localStrokes, remoteStrokes),
-                    size: Size.infinite,
-                  ),
-                ],
+            child: Center(
+              child: DrawingCanvas(
+                imagePath: widget.imagePath,
+                localPoints: localPoints,
+                remotePoints: remotePoints,
+                currentBrushSize: currentBrushSize,
+                currentColor: isEraser
+                    ? "#00000000"
+                    : currentColor, // Eraser acts as transparent/clear
+                isEraser: isEraser,
+                onStrokeUpdate: _onStrokeDrawn,
+                onStrokeEnd: _onStrokeEnded,
               ),
             ),
           ),
+
+          const SizedBox(height: 20),
         ],
       ),
     );
   }
-}
-
-class DrawingPainter extends CustomPainter {
-  final List<DrawPoint> local;
-  final List<DrawPoint> remote;
-
-  DrawingPainter(this.local, this.remote);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    _drawStrokes(canvas, remote);
-    _drawStrokes(canvas, local);
-  }
-
-  void _drawStrokes(Canvas canvas, List<DrawPoint> strokes) {
-    for (var point in strokes) {
-      String hexColor = point.color.replaceAll("#", "");
-      if (hexColor.length == 6) hexColor = "FF$hexColor";
-
-      final paint = Paint()
-        ..color = Color(int.parse("0x$hexColor"))
-        ..strokeCap = StrokeCap.round
-        ..strokeWidth = point.brushSize;
-      canvas.drawPoints(PointMode.points, [Offset(point.x, point.y)], paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant DrawingPainter oldDelegate) => true;
 }

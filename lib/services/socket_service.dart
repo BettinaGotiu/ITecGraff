@@ -3,8 +3,7 @@ import 'dart:async';
 
 class SocketService {
   late IO.Socket socket;
-  final String serverUrl =
-      'http://YOUR_BACKEND_IP:3000'; // Replace with your IP
+  final String serverUrl = 'http://192.168.56.1:3000'; // Replace with your IP
 
   final _playerJoinedController =
       StreamController<Map<String, dynamic>>.broadcast();
