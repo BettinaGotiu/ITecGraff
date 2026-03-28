@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../services/socket_service.dart';
 import '../models/stroke.dart';
 import '../widgets/drawing_canvas.dart';
@@ -26,6 +27,7 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
 
   String currentUserId = 'anonymous';
   String currentTeamId = 'pink';
+  String currentUsername = 'Guest';
 
   // State for drawing tools
   double currentBrushSize = 5.0;
@@ -33,10 +35,11 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   bool isEraser = false;
 
   // State for Game Data
-  int playerCount = 1;
+  List<Map<String, dynamic>> activePlayers = [];
   List<DrawPoint> remotePoints = [];
   List<DrawPoint> localPoints = [];
   List<DrawPoint> batchQueue = [];
+  Offset? _lastSentOffset; // Folosit pentru batching optimizat
 
   @override
   void initState() {
@@ -53,15 +56,39 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
           .doc(user.uid)
           .get();
       if (doc.exists) {
-        currentTeamId = doc.get('teamId') ?? 'pink';
+        setState(() {
+          currentTeamId = doc.get('teamId') ?? 'pink';
+          currentUsername = doc.get('username') ?? 'Player';
+        });
       }
     }
 
-    sm.connectAndJoin(currentUserId, currentTeamId, widget.posterId);
+    // Adăugăm jucătorul curent în listă pentru PlayerInfoWidget
+    setState(() {
+      activePlayers.add({
+        'userId': currentUserId,
+        'teamId': currentTeamId,
+        'username': currentUsername,
+      });
+    });
+
+    // Apelăm funcția corectă, compatibilă cu serviciul tău de socket!
+    sm.connectAndJoin(
+      currentUserId,
+      currentTeamId,
+      widget.posterId,
+      currentUsername,
+    );
 
     // Listen for new players
     sm.playerJoined.listen((data) {
-      if (mounted) setState(() => playerCount++);
+      if (mounted) {
+        setState(() {
+          if (!activePlayers.any((p) => p['userId'] == data['userId'])) {
+            activePlayers.add(data);
+          }
+        });
+      }
     });
 
     // Listen for incoming strokes
@@ -85,16 +112,29 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   void _onStrokeDrawn(DrawPoint point) {
     setState(() {
       localPoints.add(point);
-      batchQueue.add(point);
     });
 
-    if (batchQueue.length >= 10) {
+    bool shouldBatch = false;
+    if (_lastSentOffset == null) {
+      shouldBatch = true;
+    } else {
+      double dist = (Offset(point.x, point.y) - _lastSentOffset!).distance;
+      if (dist > 4.0) shouldBatch = true;
+    }
+
+    if (shouldBatch) {
+      batchQueue.add(point);
+      _lastSentOffset = Offset(point.x, point.y);
+    }
+
+    if (batchQueue.length >= 8) {
       _sendBatch();
     }
   }
 
   void _onStrokeEnded() {
     _sendBatch();
+    _lastSentOffset = null;
   }
 
   void _sendBatch() {
@@ -132,19 +172,19 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   void dispose() {
     _sendBatch();
     sm.leaveRoom(widget.posterId, currentUserId);
-    super.dispose();
+    super.dispose(); // Acest dispose al widget-ului va închide tot, curat
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100], // Clean modern background
+      backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: Text('Graff Room: ${widget.posterId}'),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
-        actions: [PlayerInfoWidget(playerCount: playerCount)],
+        actions: [PlayerInfoWidget(activePlayers: activePlayers)],
       ),
       body: Column(
         children: [

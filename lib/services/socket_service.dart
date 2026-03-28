@@ -3,7 +3,7 @@ import 'dart:async';
 
 class SocketService {
   late IO.Socket socket;
-  final String serverUrl = 'http://192.168.56.1:3000'; // Replace with your IP
+  final String serverUrl = 'http://192.168.56.1:3000'; // IP-ul tău actual
 
   final _playerJoinedController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -17,7 +17,13 @@ class SocketService {
   Stream<Map<String, dynamic>> get drawUpdates => _drawUpdateController.stream;
   Stream<Map<String, dynamic>> get gameResults => _gameResultController.stream;
 
-  void connectAndJoin(String userId, String teamId, String posterId) {
+  // AM ADĂUGAT username CA PARAMETRU AICI:
+  void connectAndJoin(
+    String userId,
+    String teamId,
+    String posterId,
+    String username,
+  ) {
     socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
@@ -31,6 +37,7 @@ class SocketService {
         'userId': userId,
         'teamId': teamId,
         'posterId': posterId,
+        'username': username, // Trimitem username-ul curat
       });
     });
 

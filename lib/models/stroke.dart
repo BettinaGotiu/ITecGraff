@@ -14,18 +14,18 @@ class DrawPoint {
   });
 
   Map<String, dynamic> toJson() => {
-        'x': x,
-        'y': y,
-        'brushSize': brushSize,
-        'color': color,
-      };
+    'x': x,
+    'y': y,
+    'brushSize': brushSize,
+    'color': color,
+  };
 
   factory DrawPoint.fromJson(Map<String, dynamic> json) => DrawPoint(
-        x: (json['x'] as num).toDouble(),
-        y: (json['y'] as num).toDouble(),
-        brushSize: (json['brushSize'] as num).toDouble(),
-        color: json['color'] as String,
-      );
+    x: (json['x'] as num).toDouble(),
+    y: (json['y'] as num).toDouble(),
+    brushSize: (json['brushSize'] as num).toDouble(),
+    color: json['color'] as String,
+  );
 }
 
 class StrokeBatch {
@@ -42,19 +42,20 @@ class StrokeBatch {
   });
 
   Map<String, dynamic> toJson() => {
-        'posterId': posterId,
-        'userId': userId,
-        'teamId': teamId,
-        'strokes': strokes.map((s) => s.toJson()).toList(),
-      };
+    'posterId': posterId,
+    'userId': userId,
+    'teamId': teamId,
+    'strokes': strokes.map((s) => s.toJson()).toList(),
+  };
 
   factory StrokeBatch.fromJson(Map<String, dynamic> json) => StrokeBatch(
-        posterId: json['posterId'] ?? '',
-        userId: json['userId'] ?? '',
-        teamId: json['teamId'] ?? '',
-        strokes: (json['strokes'] as List<dynamic>?)
-                ?.map((e) => DrawPoint.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-      );
+    posterId: json['posterId'] ?? '',
+    userId: json['userId'] ?? '',
+    teamId: json['teamId'] ?? '',
+    strokes:
+        (json['strokes'] as List<dynamic>?)
+            ?.map((e) => DrawPoint.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        [],
+  );
 }
