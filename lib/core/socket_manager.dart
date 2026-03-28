@@ -28,11 +28,29 @@ class SocketManager {
     socket?.disconnect();
   }
 
-  void joinPoster(String posterId) => socket?.emit('joinPoster', posterId);
+  void joinRoom(String userId, String teamId, String posterId) {
+    socket?.emit('joinRoom', {
+      'userId': userId,
+      'teamId': teamId,
+      'posterId': posterId,
+    });
+  }
 
-  void sendDraw(Map<String, dynamic> data) => socket?.emit('draw', data);
+  void leaveRoom(String userId, String posterId) {
+    socket?.emit('leaveRoom', {
+      'userId': userId,
+      'posterId': posterId,
+    });
+  }
 
-  void onDraw(void Function(dynamic data) handler) => socket?.on('draw', handler);
+  void sendDrawBatch(Map<String, dynamic> data) => socket?.emit('drawBatch', data);
 
-  void offDraw() => socket?.off('draw');
+  void onPlayerJoined(void Function(dynamic data) handler) => socket?.on('playerJoined', handler);
+  void offPlayerJoined() => socket?.off('playerJoined');
+
+  void onDrawUpdate(void Function(dynamic data) handler) => socket?.on('drawUpdate', handler);
+  void offDrawUpdate() => socket?.off('drawUpdate');
+
+  void onGameResult(void Function(dynamic data) handler) => socket?.on('gameResult', handler);
+  void offGameResult() => socket?.off('gameResult');
 }

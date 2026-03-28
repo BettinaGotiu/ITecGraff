@@ -1,63 +1,60 @@
-import 'package:firebase_auth/firebase_auth.dart' hide User;
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as auth;
-import '../models/user_model.dart';
-import 'package:flutter/foundation.dart';
 
-class AuthService extends ChangeNotifier {
-  final auth.FirebaseAuth _auth = auth.FirebaseAuth.instance;
+class AuthService {
+  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  UserModel? _currentUser;
-  UserModel? get currentUser => _currentUser;
+  // Get current user
+  User? get currentUser => _auth.currentUser;
 
-  AuthService() {
-    _auth.authStateChanges().listen((auth.User? user) async {
-      if (user != null) {
-        await _fetchUser(user.uid);
-      } else {
-        _currentUser = null;
-        notifyListeners();
-      }
-    });
-  }
-
-  Future<void> _fetchUser(String uid) async {
+  // Sign up with email & password and create Firestore document
+  Future<UserCredential?> signUpWithEmailPassword(
+    String email,
+    String password,
+    String username,
+    String teamId,
+  ) async {
     try {
-      DocumentSnapshot doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
-        _currentUser = UserModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
-        notifyListeners();
+      UserCredential userCredential = await _auth
+          .createUserWithEmailAndPassword(email: email, password: password);
+
+      User? user = userCredential.user;
+
+      if (user != null) {
+        // Create user document with required schema
+        await _firestore.collection('users').doc(user.uid).set({
+          'username': username,
+          'teamId': teamId,
+          'xp': 0,
+          'level': 1,
+          'gamesPlayed': 0,
+          'wins': 0,
+          'friends': [],
+          'invitations': [],
+        });
       }
+
+      return userCredential;
     } catch (e) {
-      print('Error fetching user: $e');
+      print("Sign Up Error: $e");
+      return null;
     }
   }
 
-  Future<void> login(String email, String password) async {
-    await _auth.signInWithEmailAndPassword(email: email, password: password);
-  }
-
-  Future<void> register(String email, String password, String team) async {
-    auth.UserCredential cred = await _auth.createUserWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-
-    if (cred.user != null) {
-      UserModel newUser = UserModel(
-        uid: cred.user!.uid,
+  // Sign in with email & password
+  Future<UserCredential?> signInWithEmailPassword(
+    String email,
+    String password,
+  ) async {
+    try {
+      return await _auth.signInWithEmailAndPassword(
         email: email,
-        team: team,
-        level: 1,
+        password: password,
       );
-      await _firestore.collection('users').doc(newUser.uid).set(newUser.toMap());
-      _currentUser = newUser;
-      notifyListeners();
+    } catch (e) {
+      print("Sign In Error: $e");
+      return null;
     }
-  }
-
-  Future<void> logout() async {
-    await _auth.signOut();
   }
 }

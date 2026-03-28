@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
 import 'package:flutter/material.dart';
+import 'canvas_screen.dart';
+import 'ar_canvas_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stările ecranului (camera AR rămâne activă în toate stările)
@@ -495,15 +497,39 @@ class _ScanScreenState extends State<ScanScreen>
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Singura opțiune: deschide canvas-ul direct pe acest ecran
+                    // Opțiuni AR vs 2D
                     ElevatedButton.icon(
-                      icon: const Icon(Icons.brush),
-                      label: const Text('Mergi la Canvas'),
+                      icon: const Icon(Icons.view_in_ar),
+                      label: const Text('Go to AR Canvas'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.deepPurple,
                         foregroundColor: Colors.white,
                       ),
-                      onPressed: _startDrawingHere,
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ARCanvasScreen(roomId: _detectedName),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.format_paint),
+                      label: const Text('Go to Game Room (2D)'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.pinkAccent,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CanvasScreen(initialPosterId: _detectedName),
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 10),
                     TextButton(

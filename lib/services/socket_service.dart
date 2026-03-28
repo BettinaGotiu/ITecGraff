@@ -1,82 +1,80 @@
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:flutter/foundation.dart';
+import 'dart:async';
 
-class StrokeData {
-  final Map<String, dynamic> stroke;
-  final String team;
+class SocketService {
+  late IO.Socket socket;
+  final String serverUrl =
+      'http://YOUR_BACKEND_IP:3000'; // Replace with your IP
 
-  StrokeData({required this.stroke, required this.team});
+  final _playerJoinedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _drawUpdateController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _gameResultController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
-  factory StrokeData.fromMap(Map<String, dynamic> data) {
-    return StrokeData(
-      stroke: data['stroke'] ?? {},
-      team: data['team'] ?? 'Unknown',
-    );
-  }
-}
+  Stream<Map<String, dynamic>> get playerJoined =>
+      _playerJoinedController.stream;
+  Stream<Map<String, dynamic>> get drawUpdates => _drawUpdateController.stream;
+  Stream<Map<String, dynamic>> get gameResults => _gameResultController.stream;
 
-class SocketService extends ChangeNotifier {
-  late IO.Socket _socket;
-  String? _currentRoom;
-
-  // Storing strokes received from the backend
-  List<StrokeData> _remoteStrokes = [];
-  List<StrokeData> get remoteStrokes => _remoteStrokes;
-
-  void connect(String serverUrl) {
-    _socket = IO.io(serverUrl, <String, dynamic>{
+  void connectAndJoin(String userId, String teamId, String posterId) {
+    socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
     });
 
-    _socket.connect();
+    socket.connect();
 
-    _socket.onConnect((_) {
-      print('Connected to Socket.IO backend');
+    socket.onConnect((_) {
+      print('Connected to Socket.IO Server');
+      socket.emit('joinRoom', {
+        'userId': userId,
+        'teamId': teamId,
+        'posterId': posterId,
+      });
     });
 
-    _socket.on('initialCanvas', (data) {
-      // Received all previous strokes
-      if (data is Map) {
-         data.forEach((userEmail, strokesList) {
-           for(var s in strokesList) {
-              _remoteStrokes.add(StrokeData.fromMap(s));
-           }
-         });
-         notifyListeners();
-      }
+    socket.on('playerJoined', (data) {
+      _playerJoinedController.add(Map<String, dynamic>.from(data));
     });
 
-    _socket.on('draw', (data) {
-      // New stroke from another user
-      _remoteStrokes.add(StrokeData.fromMap(data));
-      notifyListeners();
+    socket.on('drawUpdate', (data) {
+      _drawUpdateController.add(Map<String, dynamic>.from(data));
     });
 
-    _socket.onDisconnect((_) => print('Disconnected from backend'));
+    socket.on('gameResult', (data) {
+      _gameResultController.add(Map<String, dynamic>.from(data));
+    });
+
+    socket.onError((error) => print("Socket Error: $error"));
+    socket.onDisconnect((_) => print("Socket Disconnected"));
   }
 
-  void joinPosterRoom(String posterId, String email) {
-    _currentRoom = posterId;
-    _remoteStrokes.clear();
-    _socket.emit('joinPoster', {'posterId': posterId, 'email': email});
-    notifyListeners();
+  void sendDrawBatch(
+    String posterId,
+    String userId,
+    String teamId,
+    List<Map<String, dynamic>> strokes,
+  ) {
+    if (strokes.isNotEmpty) {
+      socket.emit('drawBatch', {
+        'posterId': posterId,
+        'userId': userId,
+        'teamId': teamId,
+        'strokes': strokes,
+      });
+    }
   }
 
-  void sendStroke(Map<String, dynamic> stroke, String team, String email) {
-    if (_currentRoom == null) return;
-    
-    final payload = {
-      'posterId': _currentRoom,
-      'email': email,
-      'team': team,
-      'stroke': stroke,
-    };
-    
-    _socket.emit('draw', payload);
+  void leaveRoom(String posterId, String userId) {
+    socket.emit('leaveRoom', {'posterId': posterId, 'userId': userId});
+    socket.disconnect();
   }
 
-  void disconnect() {
-    _socket.disconnect();
+  void dispose() {
+    _playerJoinedController.close();
+    _drawUpdateController.close();
+    _gameResultController.close();
   }
 }

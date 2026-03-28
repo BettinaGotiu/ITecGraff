@@ -1,35 +1,60 @@
 import 'dart:ui';
 
-class Stroke {
-  Stroke({
-    required this.id,
-    required this.points,
+class DrawPoint {
+  final double x;
+  final double y;
+  final double brushSize;
+  final String color;
+
+  DrawPoint({
+    required this.x,
+    required this.y,
+    required this.brushSize,
     required this.color,
-    required this.width,
-    required this.userId,
   });
 
-  final String id;
-  final List<Offset> points;
-  final int color;
-  final double width;
-  final String userId;
-
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'pts': points.map((point) => [point.dx, point.dy]).toList(),
+        'x': x,
+        'y': y,
+        'brushSize': brushSize,
         'color': color,
-        'w': width,
-        'u': userId,
       };
 
-  factory Stroke.fromJson(Map<String, dynamic> json) => Stroke(
-        id: json['id'] as String,
-        points: (json['pts'] as List<dynamic>)
-            .map((point) => Offset((point[0] as num).toDouble(), (point[1] as num).toDouble()))
-            .toList(),
-        color: json['color'] as int,
-        width: (json['w'] as num).toDouble(),
-        userId: json['u'] as String,
+  factory DrawPoint.fromJson(Map<String, dynamic> json) => DrawPoint(
+        x: (json['x'] as num).toDouble(),
+        y: (json['y'] as num).toDouble(),
+        brushSize: (json['brushSize'] as num).toDouble(),
+        color: json['color'] as String,
+      );
+}
+
+class StrokeBatch {
+  final String posterId;
+  final String userId;
+  final String teamId;
+  final List<DrawPoint> strokes;
+
+  StrokeBatch({
+    required this.posterId,
+    required this.userId,
+    required this.teamId,
+    required this.strokes,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'posterId': posterId,
+        'userId': userId,
+        'teamId': teamId,
+        'strokes': strokes.map((s) => s.toJson()).toList(),
+      };
+
+  factory StrokeBatch.fromJson(Map<String, dynamic> json) => StrokeBatch(
+        posterId: json['posterId'] ?? '',
+        userId: json['userId'] ?? '',
+        teamId: json['teamId'] ?? '',
+        strokes: (json['strokes'] as List<dynamic>?)
+                ?.map((e) => DrawPoint.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
       );
 }

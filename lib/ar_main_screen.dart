@@ -1,3 +1,7 @@
+import 'dart:io';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:path_provider/path_provider.dart';
+import 'package:ar_flutter_plugin/datatypes/hittest_result_types.dart';
 import 'package:flutter/material.dart';
 import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
@@ -54,7 +58,18 @@ class _ARMainScreenState extends State<ARMainScreen> {
     );
     this.arObjectManager!.onInitialize();
 
+    _copyModelToDocuments();
     _setupImageTracking();
+  }
+
+  Future<void> _copyModelToDocuments() async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final file = File('${docsDir.path}/cube.glb');
+    if (!await file.exists()) {
+      final data = await rootBundle.load('assets/models/cube.glb');
+      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      await file.writeAsBytes(bytes);
+    }
   }
 
   Future<void> _setupImageTracking() async {
@@ -91,30 +106,55 @@ class _ARMainScreenState extends State<ARMainScreen> {
     });
   }
 
+  vector.Vector3? _lastDrawPosition;
+
   // --- LOGICA DE DESEN (ANCORAT PE POSTER) ---
   void _onScreenDrag(DragUpdateDetails details) async {
     if (_currentState != AppState.drawing || _activePosterAnchor == null)
       return;
 
-    // Logica pentru a adauga puncte (ex: sfere 3D) direct pe suprafata posterului
-    // Aceste puncte vor avea ca parinte (_activePosterAnchor). Cand posterul
-    // se misca in camera, punctele se vor misca sincronizat.
+    var screenSize = MediaQuery.of(context).size;
+    var hits = await arSessionManager?.raycast(
+      screenSize,
+      details.localPosition,
+      details.globalPosition,
+    );
 
-    /*
-    // Decomenteaza si adapteaza la functia reala de raycast a plugin-ului
-    var hits = await arSessionManager?.raycast(details.localPosition);
-    if (hits != null && hits.isNotEmpty) {
-       var firstHit = hits.first;
-       
-       var drawNode = ARNode(
-           type: NodeType.localGLTF2, 
-           position: firstHit.worldTransform.getTranslation(),
-           scale: vector.Vector3(0.01, 0.01, 0.01), // Mărimea "pensulei"
-       );
+    if (hits == null || hits.isEmpty) return;
 
-       arObjectManager?.addNode(drawNode, parentAnchor: _activePosterAnchor);
+    try {
+      // Căutăm doar hit-uri de tip 'undefined' care reprezintă hit-test-ul cu AugmentedImage
+      var imageHit = hits.firstWhere((hit) => hit.type == ARHitTestResultType.undefined);
+
+      var worldPos = imageHit.worldTransform.getTranslation();
+
+      // Convertim hit-ul din coordonate globale în coordonate locale (relative la _activePosterAnchor)
+      // Acest calcul garantează ancorarea si menținerea proporțiilor atunci când posterul se mișcă
+      var inverseAnchorTransform = vector.Matrix4.copy(_activePosterAnchor!.transformation)..invert();
+      var localPosition = inverseAnchorTransform.transform3(worldPos);
+
+      // Mentinem o distanta minima intre pensule pentru a nu genera suprapuneri infinite (ex 5 mm)
+      if (_lastDrawPosition != null) {
+        var dist = localPosition.distanceTo(_lastDrawPosition!);
+        if (dist < 0.005) {
+          return;
+        }
+      }
+      _lastDrawPosition = localPosition;
+
+      // Adaugăm efectiv nodul pe canavaua locală a ancorării (posterul)
+      var drawNode = ARNode(
+        type: NodeType.fileSystemAppFolderGLB,
+        uri: 'cube.glb',
+        position: localPosition,
+        scale: vector.Vector3(0.005, 0.005, 0.005), // Brush size
+      );
+
+      arObjectManager?.addNode(drawNode, parentAnchor: _activePosterAnchor);
+    } catch (e) {
+      // Daca exceptia survine din iteratie (nu atinge afisul), ignoram desenarea
+      return;
     }
-    */
   }
 
   @override
