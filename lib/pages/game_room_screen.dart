@@ -28,6 +28,7 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   String currentUserId = 'anonymous';
   String currentTeamId = 'pink';
   String currentUsername = 'Guest';
+  int currentLevel = 1; // NOU: necesar pentru backend
 
   // State for drawing tools
   double currentBrushSize = 5.0;
@@ -39,7 +40,11 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   List<DrawPoint> remotePoints = [];
   List<DrawPoint> localPoints = [];
   List<DrawPoint> batchQueue = [];
-  Offset? _lastSentOffset; // Folosit pentru batching optimizat
+  Offset? _lastSentOffset;
+
+  // Real-time data din backend
+  int timeLeft = 30;
+  Map<String, dynamic> currentCoverage = {'pink': 0, 'blue': 0};
 
   @override
   void initState() {
@@ -59,11 +64,11 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
         setState(() {
           currentTeamId = doc.get('teamId') ?? 'pink';
           currentUsername = doc.get('username') ?? 'Player';
+          currentLevel = doc.get('level') ?? 1; // Extragem și nivelul
         });
       }
     }
 
-    // Adăugăm jucătorul curent în listă pentru PlayerInfoWidget
     setState(() {
       activePlayers.add({
         'userId': currentUserId,
@@ -72,15 +77,32 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
       });
     });
 
-    // Apelăm funcția corectă, compatibilă cu serviciul tău de socket!
-    sm.connectAndJoin(
+    // FIX: Folosim metoda corectă din noul SocketService
+    sm.connectAndRegister(
       currentUserId,
-      currentTeamId,
-      widget.posterId,
       currentUsername,
+      currentTeamId,
+      currentLevel,
+      widget.posterId,
     );
 
-    // Listen for new players
+    // Initial state (gets strokes already drawn by others if you join late)
+    sm.roomState.listen((data) {
+      if (!mounted) return;
+      try {
+        setState(() {
+          if (data['strokes'] != null) {
+            final incomingBatch = StrokeBatch.fromJson(
+              Map<String, dynamic>.from(data),
+            );
+            remotePoints = incomingBatch.strokes;
+          }
+        });
+      } catch (e) {
+        print("Error parsing roomState: $e");
+      }
+    });
+
     sm.playerJoined.listen((data) {
       if (mounted) {
         setState(() {
@@ -91,7 +113,14 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
       }
     });
 
-    // Listen for incoming strokes
+    sm.userLeft.listen((data) {
+      if (mounted) {
+        setState(() {
+          activePlayers.removeWhere((p) => p['userId'] == data['userId']);
+        });
+      }
+    });
+
     sm.drawUpdates.listen((data) {
       if (!mounted) return;
       final incomingBatch = StrokeBatch.fromJson(
@@ -102,7 +131,18 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
       });
     });
 
-    // Listen for game end
+    // Ascultăm timer-ul și acoperirea dinamică
+    sm.timerUpdates.listen((data) {
+      if (!mounted) return;
+      setState(() {
+        timeLeft = data['timeLeft'] ?? 0;
+        if (data['coverage'] != null) {
+          currentCoverage = Map<String, dynamic>.from(data['coverage']);
+        }
+      });
+    });
+
+    // Ascultăm rezultatul final (cu validări anti-crash)
     sm.gameResults.listen((data) {
       if (!mounted) return;
       _showGameResultDialog(data);
@@ -149,19 +189,78 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   }
 
   void _showGameResultDialog(Map<String, dynamic> result) {
+    // Extragem sigur valorile pentru a evita excepțiile Null
+    String winnerTeam = result['winnerTeam'] ?? 'Egalitate';
+
+    // Verificăm scorul per echipă
+    Map<String, dynamic> teamScores = result['teamScores'] != null
+        ? Map<String, dynamic>.from(result['teamScores'])
+        : {'pink': 0, 'blue': 0};
+
+    // Verificăm XP-ul. Dacă e null, obținem 0.
+    int gainedXp = 0;
+    if (result['xp'] != null) {
+      gainedXp = result['xp'][currentUserId] ?? 0;
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text("Game Over!"),
-        content: Text(
-          "Winner: ${result['winnerTeam']}\nCoverage: ${result['coverage']}%\nXP: ${result['xp'][currentUserId] ?? 0}",
+        title: Row(
+          children: [
+            const Icon(Icons.emoji_events, color: Colors.amber, size: 30),
+            const SizedBox(width: 8),
+            Text(
+              "Echipa $winnerTeam a câștigat!",
+              style: const TextStyle(fontSize: 20),
+            ),
+          ],
         ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Scor Final Acoperire:",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "💗 Pink Team: ${teamScores['pink'] ?? 0}%",
+              style: const TextStyle(color: Colors.pink),
+            ),
+            Text(
+              "🔵 Blue Team: ${teamScores['blue'] ?? 0}%",
+              style: const TextStyle(color: Colors.blue),
+            ),
+            const Divider(height: 30),
+            Center(
+              child: Text(
+                "+ $gainedXp XP",
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.spaceEvenly,
         actions: [
           TextButton(
+            onPressed: () {
+              Navigator.pop(context); // Doar închidem pop-up-ul
+            },
+            child: const Text("Rămâi în cameră"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () =>
                 Navigator.popUntil(context, (route) => route.isFirst),
-            child: const Text("Exit"),
+            child: const Text("Ieșire", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -172,7 +271,9 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   void dispose() {
     _sendBatch();
     sm.leaveRoom(widget.posterId, currentUserId);
-    super.dispose(); // Acest dispose al widget-ului va închide tot, curat
+    // Deconectăm manual când părăsim camera definitiv
+    sm.socket?.disconnect();
+    super.dispose();
   }
 
   @override
@@ -180,7 +281,38 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: Text('Graff Room: ${widget.posterId}'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Room: ${widget.posterId}',
+              style: const TextStyle(fontSize: 16),
+            ),
+            // UI pentru Timp și Acoperire în timp real
+            Row(
+              children: [
+                Icon(
+                  Icons.timer,
+                  size: 14,
+                  color: timeLeft <= 5 ? Colors.red : Colors.grey,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '$timeLeft s',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: timeLeft <= 5 ? Colors.red : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Pink: ${currentCoverage['pink'] ?? 0}% | Blue: ${currentCoverage['blue'] ?? 0}%',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+          ],
+        ),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
@@ -188,7 +320,6 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
       ),
       body: Column(
         children: [
-          // The Toolbar at the top
           ToolbarWidget(
             currentColor: isEraser ? "#00000000" : currentColor,
             currentBrushSize: currentBrushSize,
@@ -201,10 +332,7 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
                 setState(() => currentBrushSize = size),
             onEraserToggled: () => setState(() => isEraser = true),
           ),
-
           const SizedBox(height: 20),
-
-          // The Framed Poster Canvas
           Expanded(
             child: Center(
               child: DrawingCanvas(
@@ -212,16 +340,13 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
                 localPoints: localPoints,
                 remotePoints: remotePoints,
                 currentBrushSize: currentBrushSize,
-                currentColor: isEraser
-                    ? "#00000000"
-                    : currentColor, // Eraser acts as transparent/clear
+                currentColor: isEraser ? "#00000000" : currentColor,
                 isEraser: isEraser,
                 onStrokeUpdate: _onStrokeDrawn,
                 onStrokeEnd: _onStrokeEnded,
               ),
             ),
           ),
-
           const SizedBox(height: 20),
         ],
       ),

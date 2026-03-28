@@ -6,6 +6,7 @@ import '../models/friend.dart';
 import '../widgets/app_button.dart';
 import '../widgets/app_text_field.dart';
 import '../widgets/neon_card.dart';
+import '../widgets/friend_requests_widget.dart'; // NOU: am importat widget-ul
 
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});
@@ -80,7 +81,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final me = FirebaseAuth.instance.currentUser;
     if (me == null) return;
 
-    final fromDoc = await FirebaseFirestore.instance.collection('user_data').doc(me.uid).get();
+    final fromDoc = await FirebaseFirestore.instance
+        .collection('user_data')
+        .doc(me.uid)
+        .get();
     final fromData = fromDoc.data() ?? <String, dynamic>{};
 
     await FirebaseFirestore.instance
@@ -89,12 +93,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
         .collection('friend_requests')
         .doc(me.uid)
         .set({
-      'fromUid': me.uid,
-      'fromUsername': fromData['username'] ?? me.displayName ?? 'Unknown',
-      'fromEmail': me.email ?? '',
-      'status': 'pending',
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+          'fromUid': me.uid,
+          'fromUsername': fromData['username'] ?? me.displayName ?? 'Unknown',
+          'fromEmail': me.email ?? '',
+          'status': 'pending',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -118,11 +122,31 @@ class _FriendsScreenState extends State<FriendsScreen> {
             constraints: const BoxConstraints(maxWidth: 620),
             child: Column(
               children: [
+                // NOU: Header care conține Titlul Paginei și Clopoțelul de Cereri
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Prieteni',
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const FriendRequestsWidget(), // Widget-ul este plasat aici
+                  ],
+                ),
+                const SizedBox(height: 16),
+
                 NeonCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('Find friends', style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Find friends',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                       const SizedBox(height: 12),
                       AppTextField(
                         controller: _searchCtrl,
@@ -158,13 +182,18 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('Your friends', style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Your friends',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                       const SizedBox(height: 8),
                       StreamBuilder<List<Friend>>(
                         stream: _friendsStream(),
                         builder: (context, snapshot) {
                           if (!snapshot.hasData) {
-                            return const Center(child: CircularProgressIndicator());
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
                           }
 
                           final friends = snapshot.data!;
@@ -175,16 +204,18 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             );
                           }
 
-                          return Column(
-                            children: friends
-                                .map(
-                                  (friend) => ListTile(
-                                    leading: const Icon(Icons.group_outlined),
-                                    title: Text(friend.username),
-                                    subtitle: Text(friend.email),
-                                  ),
-                                )
-                                .toList(),
+                          return ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: friends.length,
+                            itemBuilder: (_, i) {
+                              final f = friends[i];
+                              return ListTile(
+                                leading: const Icon(Icons.person),
+                                title: Text(f.username),
+                                subtitle: Text(f.email),
+                              );
+                            },
                           );
                         },
                       ),
