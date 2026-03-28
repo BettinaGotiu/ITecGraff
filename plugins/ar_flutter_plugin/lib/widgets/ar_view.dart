@@ -7,14 +7,12 @@ import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin/datatypes/config_planedetection.dart';
 
-// Type definitions to enforce a consistent use of the API
 typedef ARViewCreatedCallback = void Function(
     ARSessionManager arSessionManager,
     ARObjectManager arObjectManager,
     ARAnchorManager arAnchorManager,
     ARLocationManager arLocationManager);
 
-/// Factory method for creating a platform-dependent AR view
 abstract class PlatformARView {
   factory PlatformARView(TargetPlatform platform) {
     switch (platform) {
@@ -32,12 +30,10 @@ abstract class PlatformARView {
       required ARViewCreatedCallback arViewCreatedCallback,
       required PlaneDetectionConfig planeDetectionConfig});
 
-  /// Callback function that is executed once the view is established
   void onPlatformViewCreated(int id);
 }
 
-/// Instantiates managers correctly handling MethodChannels
-createManagers(
+void createManagers(
     int id,
     BuildContext? context,
     ARViewCreatedCallback? arViewCreatedCallback,
@@ -48,17 +44,13 @@ createManagers(
     return;
   }
 
-  // FIX: Creăm canalul de comunicare bazat pe ID-ul instanței native!
-  final channel = MethodChannel('ar_flutter_plugin_$id');
-
   arViewCreatedCallback(
       ARSessionManager(id, context, planeDetectionConfig),
-      ARObjectManager(channel), // Acum pasează MethodChannel!
-      ARAnchorManager(channel), // Acum pasează MethodChannel!
+      ARObjectManager(id), // REZOLVAT: Acum primeste int ID
+      ARAnchorManager(id), // REZOLVAT: Acum primeste int ID
       ARLocationManager());
 }
 
-/// Android-specific implementation
 class AndroidARView implements PlatformARView {
   late BuildContext _context;
   late ARViewCreatedCallback _arViewCreatedCallback;
@@ -66,7 +58,6 @@ class AndroidARView implements PlatformARView {
 
   @override
   void onPlatformViewCreated(int id) {
-    print("Android platform view created!");
     createManagers(id, _context, _arViewCreatedCallback, _planeDetectionConfig);
   }
 
@@ -92,7 +83,6 @@ class AndroidARView implements PlatformARView {
   }
 }
 
-/// iOS-specific implementation
 class IosARView implements PlatformARView {
   late BuildContext _context;
   late ARViewCreatedCallback _arViewCreatedCallback;
@@ -100,7 +90,6 @@ class IosARView implements PlatformARView {
 
   @override
   void onPlatformViewCreated(int id) {
-    print("iOS platform view created!");
     createManagers(id, _context, _arViewCreatedCallback, _planeDetectionConfig);
   }
 
@@ -180,9 +169,11 @@ class _ARViewState extends State<ARView> {
 
   requestCameraPermission() async {
     final cameraPermission = await Permission.camera.request();
-    setState(() {
-      _cameraPermission = cameraPermission;
-    });
+    if (mounted) {
+      setState(() {
+        _cameraPermission = cameraPermission;
+      });
+    }
   }
 
   requestCameraPermissionFromSettings() async {
@@ -190,9 +181,11 @@ class _ARViewState extends State<ARView> {
     if (cameraPermission == PermissionStatus.permanentlyDenied) {
       openAppSettings();
     }
-    setState(() {
-      _cameraPermission = cameraPermission;
-    });
+    if (mounted) {
+      setState(() {
+        _cameraPermission = cameraPermission;
+      });
+    }
   }
 
   @override
