@@ -196,6 +196,17 @@ internal class AndroidARView(
                                 result.error("Error", "could not get camera pose", null)
                             }
                         }
+                        "getCameraProjectionMatrix" -> {
+                            val camera = arSceneView.arFrame?.camera
+                            if (camera != null) {
+                                val projMatrix = FloatArray(16)
+                                camera.getProjectionMatrix(projMatrix, 0, 0.1f, 100f)
+                                val projMatrixDouble = projMatrix.map { it.toDouble() }
+                                result.success(projMatrixDouble)
+                            } else {
+                                result.error("Error", "could not get camera projection matrix", null)
+                            }
+                        }
                         "snapshot" -> {
                             var bitmap = Bitmap.createBitmap(arSceneView.width, arSceneView.height,
                                     Bitmap.Config.ARGB_8888);
