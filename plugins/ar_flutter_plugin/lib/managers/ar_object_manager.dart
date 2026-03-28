@@ -4,15 +4,18 @@ import 'package:ar_flutter_plugin/models/ar_node.dart';
 import 'package:ar_flutter_plugin/models/ar_anchor.dart';
 
 class ARObjectManager {
-  ARObjectManager(this._channel);
+  late MethodChannel _channel;
 
-  final MethodChannel _channel;
+  // REZOLVAT: Acum primeste `int id` la fel ca ceilalti manageri
+  ARObjectManager(int id) {
+    _channel = MethodChannel('arobjects_$id'); // Cream canalul intern
+  }
 
   void onInitialize() {
     _channel.invokeMethod<void>('initObjectManager');
   }
 
-  Future<bool?> addNode(ARNode node, {ARPlaneAnchor? planeAnchor}) async {
+  Future<bool?> addNode(ARNode node, {ARAnchor? parentAnchor}) async {
     try {
       node.transformNotifier.addListener(() {
         _channel.invokeMethod<void>('transformationChanged', {
@@ -20,11 +23,13 @@ class ARObjectManager {
           'transformation': const MatrixConverter().toJson(node.transform)
         });
       });
+      // Am schimbat planeAnchor cu parentAnchor ca sa suportam si ImageAnchor
       bool? didAddNode = await _channel.invokeMethod<bool>('addNode', {
         'dict': node.toMap(),
       });
       return didAddNode;
     } on PlatformException catch (e) {
+      print('Error adding node: $e');
       return false;
     }
   }

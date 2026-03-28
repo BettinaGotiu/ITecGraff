@@ -10,23 +10,20 @@ import 'package:ar_flutter_plugin/models/ar_node.dart';
 import 'package:ar_flutter_plugin/datatypes/node_types.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 
-// Stările prin care trece ecranul (fără să închidă camera)
 enum AppState { scanning, popup, drawing }
 
-class ScanScreen extends StatefulWidget {
-  const ScanScreen({Key? key}) : super(key: key);
+class ARMainScreen extends StatefulWidget {
+  const ARMainScreen({Key? key}) : super(key: key);
 
   @override
-  _ScanScreenState createState() => _ScanScreenState();
+  _ARMainScreenState createState() => _ARMainScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> {
-  // Managerii pentru plugin-ul AR
+class _ARMainScreenState extends State<ARMainScreen> {
   ARSessionManager? arSessionManager;
   ARObjectManager? arObjectManager;
   ARAnchorManager? arAnchorManager;
 
-  // Variabile de stare
   AppState _currentState = AppState.scanning;
   String _detectedRoomName = "";
   ARImageAnchor? _activePosterAnchor;
@@ -34,12 +31,10 @@ class _ScanScreenState extends State<ScanScreen> {
 
   @override
   void dispose() {
-    arSessionManager
-        ?.dispose(); // Oprim sesiunea AR cand iesim definitiv din pagina
     super.dispose();
+    arSessionManager?.dispose(); // Oprim sesiunea la iesirea din ecran
   }
 
-  // Funcția apelată când camera AR este pregătită
   void onARViewCreated(
     ARSessionManager arSessionManager,
     ARObjectManager arObjectManager,
@@ -50,94 +45,72 @@ class _ScanScreenState extends State<ScanScreen> {
     this.arObjectManager = arObjectManager;
     this.arAnchorManager = arAnchorManager;
 
-    // Inițializare optimizată strict pentru imagini (fără podele)
+    // Initializam Sesiunea AR
     this.arSessionManager!.onInitialize(
-      showFeaturePoints: false,
-      showPlanes: false,
+      showFeaturePoints: false, // Fara puncte pe ecran
+      showPlanes: false, // Nu cautam podeaua, ne intereseaza doar posterul
       showWorldOrigin: false,
       handleTaps: false,
-      handlePans: false,
-      handleRotation: false,
     );
-
     this.arObjectManager!.onInitialize();
 
-    // Încărcăm imaginile pentru tracking
-    _loadReferenceImages();
+    _setupImageTracking();
   }
 
-  Future<void> _loadReferenceImages() async {
-    // Adăugăm posterele în baza de date AR
-    await arSessionManager?.addReferenceImage(
-      name: "room_1",
-      path: "assets/images/poster1.jpg",
-      physicalWidth: 0.5,
-    );
-
-    await arSessionManager?.addReferenceImage(
-      name: "room_2",
-      path: "assets/images/poster2.jpg",
-      physicalWidth: 0.5,
-    );
-
-    await arSessionManager?.addReferenceImage(
-      name: "room_cola",
-      path: "assets/images/poster_cola.jpg",
-      physicalWidth: 0.5,
-    );
-
+  Future<void> _setupImageTracking() async {
+    // 1. INCARCAM IMAGINEA IN SISTEMUL AR
+    // IMPORTANT: Numele fisierului trebuie sa existe in pubspec.yaml si in folderul assets/images
     await arSessionManager?.addReferenceImage(
       name: "afis12",
       path: "assets/images/afis12.png",
-      physicalWidth: 0.4,
+      physicalWidth:
+          0.4, // Estimare: posterul real are 40 cm latime in viata reala
     );
 
-    // Ascultăm când ARCore detectează una din imaginile de mai sus
+    // 2. ASCULTAM PENTRU MOMENTUL IN CARE CAMERA DETECTEAZA POSTERUL
     arAnchorManager?.onAnchorDownloaded =
         (Map<String, dynamic> serializedAnchor) {
           final anchor = ARAnchor.fromJson(serializedAnchor);
 
           if (anchor is ARImageAnchor && _currentState == AppState.scanning) {
-            onImageDetected(anchor);
+            // Daca a gasit o imagine si noi o cautam, verificam daca e afis12
+            if (anchor.referenceImageName == "afis12") {
+              _showRoomPopup(anchor, "Camera Afișului 12");
+            }
           }
           return anchor;
         };
   }
 
-  // Logica de detectare a imaginii
-  void onImageDetected(ARImageAnchor anchor) {
-    String roomName = "Unknown Room";
-    if (anchor.referenceImageName == "room_1") roomName = "Camera Principală";
-    if (anchor.referenceImageName == "room_2") roomName = "Camera Secundară";
-    if (anchor.referenceImageName == "room_cola") roomName = "Camera Cola";
-    if (anchor.referenceImageName == "afis12") roomName = "Camera Afiș 12";
-
+  void _showRoomPopup(ARImageAnchor anchor, String roomName) {
     setState(() {
       _detectedRoomName = roomName;
       _activePosterAnchor = anchor;
-      _currentState = AppState.popup; // Afișăm popup-ul peste cameră
+      _currentState = AppState.popup;
     });
   }
 
-  // Logica pentru desen - Se activează doar în starea "drawing"
+  // --- LOGICA DE DESEN (ANCORAT PE POSTER) ---
   void _onScreenDrag(DragUpdateDetails details) async {
     if (_currentState != AppState.drawing || _activePosterAnchor == null)
       return;
 
-    // Aici se face hit-test-ul 2D la 3D
-    // Exemplu conceptual de implementare folosind un raycast
+    // Logica pentru a adauga puncte (ex: sfere 3D) direct pe suprafata posterului
+    // Aceste puncte vor avea ca parinte (_activePosterAnchor). Cand posterul
+    // se misca in camera, punctele se vor misca sincronizat.
+
     /*
+    // Decomenteaza si adapteaza la functia reala de raycast a plugin-ului
     var hits = await arSessionManager?.raycast(details.localPosition);
     if (hits != null && hits.isNotEmpty) {
        var firstHit = hits.first;
        
        var drawNode = ARNode(
-           type: NodeType.flutterWidget, // Sau localGLTF2 cu o sfera
+           type: NodeType.localGLTF2, 
            position: firstHit.worldTransform.getTranslation(),
-           scale: vector.Vector3(0.02, 0.02, 0.02),
+           scale: vector.Vector3(0.01, 0.01, 0.01), // Mărimea "pensulei"
        );
 
-       // ANCORĂM NODUL DIRECT PE POSTER (ARImageAnchor)
        arObjectManager?.addNode(drawNode, parentAnchor: _activePosterAnchor);
     }
     */
@@ -146,19 +119,15 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('AR Scanner & Graff'),
-        backgroundColor: Colors.black87,
-      ),
       body: Stack(
         children: [
-          // 1. STRATUL 3D: Camera AR care rulează continuu în fundal
+          // WIDGET-UL CARE DESCHIDE CAMERA PROPRIU-ZISĂ
           ARView(
             onARViewCreated: onARViewCreated,
             planeDetectionConfig: PlaneDetectionConfig.none,
           ),
 
-          // 2. STRATUL UI: Se modifică în funcție de ce facem
+          // Interfata aplicata PESTE camera in functie de stare
           _buildUIOverlay(),
         ],
       ),
@@ -176,70 +145,76 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
-  // UI - Mod Scanare
   Widget _buildScanningUI() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.crop_free, size: 100, color: Colors.white54),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: Colors.black54,
-            child: const Text(
-              "Îndreaptă camera spre un poster...",
-              style: TextStyle(color: Colors.white, fontSize: 18),
-            ),
+    return Positioned(
+      bottom: 50,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(20),
           ),
-        ],
+          child: const Text(
+            "Îndreaptă camera spre afis12.png...",
+            style: TextStyle(color: Colors.white, fontSize: 16),
+          ),
+        ),
       ),
     );
   }
 
-  // UI - Pop-up
   Widget _buildPopupUI() {
     return Container(
       color: Colors.black54, // Dimming background
       child: Center(
         child: Card(
-          margin: const EdgeInsets.all(20),
+          elevation: 8,
+          margin: const EdgeInsets.symmetric(horizontal: 30),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                const Icon(Icons.check_circle, color: Colors.green, size: 60),
+                const SizedBox(height: 16),
                 const Text(
                   "Poster Detectat!",
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  "Do you want to join $_detectedRoomName?",
+                  "Vrei să intri în $_detectedRoomName?",
+                  textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 16),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 30),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _currentState =
-                              AppState.scanning; // Revenim la scanare
-                          _activePosterAnchor = null;
-                        });
-                      },
+                    OutlinedButton(
+                      onPressed: () => setState(() {
+                        _currentState = AppState.scanning;
+                        _activePosterAnchor = null;
+                      }),
                       child: const Text("Cancel"),
                     ),
                     ElevatedButton(
-                      onPressed: () {
-                        setState(() {
-                          _currentState =
-                              AppState.drawing; // Trecem direct la desen!
-                        });
-                      },
-                      child: const Text("Join"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                      ),
+                      onPressed: () => setState(() {
+                        _currentState = AppState.drawing;
+                      }),
+                      child: const Text(
+                        "Join Room",
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -251,11 +226,10 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  // UI - Mod Desenare
   Widget _buildDrawingUI() {
     return Stack(
       children: [
-        // Panou invizibil pentru a capta desenul pe ecran
+        // Suprafata invizibila pentru a prinde gesturile de desen
         GestureDetector(
           onPanUpdate: _onScreenDrag,
           child: Container(
@@ -264,34 +238,51 @@ class _ScanScreenState extends State<ScanScreen> {
             height: double.infinity,
           ),
         ),
-
-        // Buton iesire
+        // Buton de iesire din camera
         Positioned(
-          top: 20,
+          top: 50,
           left: 20,
-          child: IconButton(
-            icon: const Icon(Icons.close, color: Colors.white, size: 30),
-            onPressed: () {
-              setState(() {
-                _currentState = AppState.scanning;
-                _activePosterAnchor = null;
-              });
-            },
+          child: FloatingActionButton(
+            backgroundColor: Colors.white,
+            mini: true,
+            child: const Icon(Icons.close, color: Colors.black),
+            onPressed: () => setState(() {
+              _currentState = AppState.scanning;
+              _activePosterAnchor = null;
+            }),
           ),
         ),
-
-        // Color Picker
+        // Indicator Camera
         Positioned(
-          bottom: 40,
+          top: 60,
+          right: 20,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.blueAccent,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              _detectedRoomName,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        // Selector Culori
+        Positioned(
+          bottom: 30,
           left: 0,
           right: 0,
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildColorButton(Colors.red),
-              _buildColorButton(Colors.green),
-              _buildColorButton(Colors.blue),
-              _buildColorButton(Colors.yellow),
+              _colorBtn(Colors.red),
+              _colorBtn(Colors.green),
+              _colorBtn(Colors.blue),
+              _colorBtn(Colors.yellow),
             ],
           ),
         ),
@@ -299,14 +290,11 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  Widget _buildColorButton(Color color) {
+  Widget _colorBtn(Color color) {
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedColor = color;
-        });
-      },
+      onTap: () => setState(() => _selectedColor = color),
       child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10),
         width: 45,
         height: 45,
         decoration: BoxDecoration(

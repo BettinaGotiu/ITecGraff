@@ -1,11 +1,11 @@
-import 'package:ar_flutter_plugin/managers/ar_anchor_manager.dart';
-import 'package:ar_flutter_plugin/managers/ar_location_manager.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
-import 'package:ar_flutter_plugin/managers/ar_object_manager.dart';
-import 'package:ar_flutter_plugin/datatypes/config_planedetection.dart';
+import '../managers/ar_session_manager.dart';
+import '../managers/ar_object_manager.dart';
+import '../managers/ar_anchor_manager.dart';
+import '../managers/ar_location_manager.dart';
+import '../datatypes/config_planedetection.dart';
 
 typedef ARViewCreatedCallback = void Function(
     ARSessionManager arSessionManager,
@@ -13,221 +13,60 @@ typedef ARViewCreatedCallback = void Function(
     ARAnchorManager arAnchorManager,
     ARLocationManager arLocationManager);
 
-abstract class PlatformARView {
-  factory PlatformARView(TargetPlatform platform) {
-    switch (platform) {
-      case TargetPlatform.android:
-        return AndroidARView();
-      case TargetPlatform.iOS:
-        return IosARView();
-      default:
-        throw FlutterError('Unsupported platform');
-    }
-  }
-
-  Widget build(
-      {required BuildContext context,
-      required ARViewCreatedCallback arViewCreatedCallback,
-      required PlaneDetectionConfig planeDetectionConfig});
-
-  void onPlatformViewCreated(int id);
-}
-
-void createManagers(
-    int id,
-    BuildContext? context,
-    ARViewCreatedCallback? arViewCreatedCallback,
-    PlaneDetectionConfig? planeDetectionConfig) {
-  if (context == null ||
-      arViewCreatedCallback == null ||
-      planeDetectionConfig == null) {
-    return;
-  }
-
-  arViewCreatedCallback(
-      ARSessionManager(id, context, planeDetectionConfig),
-      ARObjectManager(id), // REZOLVAT: Acum primeste int ID
-      ARAnchorManager(id), // REZOLVAT: Acum primeste int ID
-      ARLocationManager());
-}
-
-class AndroidARView implements PlatformARView {
-  late BuildContext _context;
-  late ARViewCreatedCallback _arViewCreatedCallback;
-  late PlaneDetectionConfig _planeDetectionConfig;
-
-  @override
-  void onPlatformViewCreated(int id) {
-    createManagers(id, _context, _arViewCreatedCallback, _planeDetectionConfig);
-  }
-
-  @override
-  Widget build(
-      {BuildContext? context,
-      ARViewCreatedCallback? arViewCreatedCallback,
-      PlaneDetectionConfig? planeDetectionConfig}) {
-    _context = context!;
-    _arViewCreatedCallback = arViewCreatedCallback!;
-    _planeDetectionConfig = planeDetectionConfig!;
-
-    final String viewType = 'ar_flutter_plugin';
-    final Map<String, dynamic> creationParams = <String, dynamic>{};
-
-    return AndroidView(
-      viewType: viewType,
-      layoutDirection: TextDirection.ltr,
-      creationParams: creationParams,
-      creationParamsCodec: const StandardMessageCodec(),
-      onPlatformViewCreated: onPlatformViewCreated,
-    );
-  }
-}
-
-class IosARView implements PlatformARView {
-  late BuildContext _context;
-  late ARViewCreatedCallback _arViewCreatedCallback;
-  late PlaneDetectionConfig _planeDetectionConfig;
-
-  @override
-  void onPlatformViewCreated(int id) {
-    createManagers(id, _context, _arViewCreatedCallback, _planeDetectionConfig);
-  }
-
-  @override
-  Widget build(
-      {BuildContext? context,
-      ARViewCreatedCallback? arViewCreatedCallback,
-      PlaneDetectionConfig? planeDetectionConfig}) {
-    _context = context!;
-    _arViewCreatedCallback = arViewCreatedCallback!;
-    _planeDetectionConfig = planeDetectionConfig!;
-
-    final String viewType = 'ar_flutter_plugin';
-    final Map<String, dynamic> creationParams = <String, dynamic>{};
-
-    return UiKitView(
-      viewType: viewType,
-      layoutDirection: TextDirection.ltr,
-      creationParams: creationParams,
-      creationParamsCodec: const StandardMessageCodec(),
-      onPlatformViewCreated: onPlatformViewCreated,
-    );
-  }
-}
-
 class ARView extends StatefulWidget {
-  final String permissionPromptDescription;
-  final String permissionPromptButtonText;
-  final String permissionPromptParentalRestriction;
   final ARViewCreatedCallback onARViewCreated;
+  final bool showPlanes;
+  final bool customPlaneTexturePath;
+  final bool showFeaturePoints;
+  final bool showWorldOrigin;
+  final bool handleTaps;
+  final bool handlePans;
+  final bool handleRotation;
   final PlaneDetectionConfig planeDetectionConfig;
-  final bool showPlatformType;
 
-  ARView(
-      {Key? key,
-      required this.onARViewCreated,
-      this.planeDetectionConfig = PlaneDetectionConfig.none,
-      this.showPlatformType = false,
-      this.permissionPromptDescription =
-          "Camera permission must be given to the app for AR functions to work",
-      this.permissionPromptButtonText = "Grant Permission",
-      this.permissionPromptParentalRestriction =
-          "Camera permission is restriced by the OS, please check parental control settings"})
-      : super(key: key);
+  const ARView({
+    Key? key,
+    required this.onARViewCreated,
+    this.showPlanes = false,
+    this.customPlaneTexturePath = false,
+    this.showFeaturePoints = false,
+    this.showWorldOrigin = false,
+    this.handleTaps = true,
+    this.handlePans = true,
+    this.handleRotation = true,
+    this.planeDetectionConfig = PlaneDetectionConfig.none,
+  }) : super(key: key);
 
   @override
-  _ARViewState createState() => _ARViewState(
-      showPlatformType: this.showPlatformType,
-      permissionPromptDescription: this.permissionPromptDescription,
-      permissionPromptButtonText: this.permissionPromptButtonText,
-      permissionPromptParentalRestriction:
-          this.permissionPromptParentalRestriction);
+  _ARViewState createState() => _ARViewState();
 }
 
 class _ARViewState extends State<ARView> {
-  PermissionStatus _cameraPermission = PermissionStatus.denied;
-  bool showPlatformType;
-  String permissionPromptDescription;
-  String permissionPromptButtonText;
-  String permissionPromptParentalRestriction;
-
-  _ARViewState(
-      {required this.showPlatformType,
-      required this.permissionPromptDescription,
-      required this.permissionPromptButtonText,
-      required this.permissionPromptParentalRestriction});
-
-  @override
-  void initState() {
-    super.initState();
-    initCameraPermission();
-  }
-
-  initCameraPermission() async {
-    requestCameraPermission();
-  }
-
-  requestCameraPermission() async {
-    final cameraPermission = await Permission.camera.request();
-    if (mounted) {
-      setState(() {
-        _cameraPermission = cameraPermission;
-      });
-    }
-  }
-
-  requestCameraPermissionFromSettings() async {
-    final cameraPermission = await Permission.camera.request();
-    if (cameraPermission == PermissionStatus.permanentlyDenied) {
-      openAppSettings();
-    }
-    if (mounted) {
-      setState(() {
-        _cameraPermission = cameraPermission;
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    switch (_cameraPermission) {
-      case PermissionStatus.limited:
-      case PermissionStatus.granted:
-        return Column(children: [
-          if (showPlatformType) Text(Theme.of(context).platform.toString()),
-          Expanded(
-              child: PlatformARView(Theme.of(context).platform).build(
-                  context: context,
-                  arViewCreatedCallback: widget.onARViewCreated,
-                  planeDetectionConfig: widget.planeDetectionConfig)),
-        ]);
-      case PermissionStatus.denied:
-        return Center(
-            child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(permissionPromptDescription, textAlign: TextAlign.center),
-            ElevatedButton(
-                child: Text(permissionPromptButtonText),
-                onPressed: () async => {await requestCameraPermission()})
-          ],
-        ));
-      case PermissionStatus.permanentlyDenied:
-        return Center(
-            child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(permissionPromptDescription, textAlign: TextAlign.center),
-            ElevatedButton(
-                child: Text(permissionPromptButtonText),
-                onPressed: () async =>
-                    {await requestCameraPermissionFromSettings()})
-          ],
-        ));
-      case PermissionStatus.restricted:
-        return Center(child: Text(permissionPromptParentalRestriction));
-      default:
-        return const Text('Something went wrong');
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidView(
+        viewType: 'ar_flutter_plugin',
+        onPlatformViewCreated: onPlatformViewCreated,
+        creationParamsCodec: const StandardMessageCodec(),
+      );
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return UiKitView(
+        viewType: 'ar_flutter_plugin',
+        onPlatformViewCreated: onPlatformViewCreated,
+        creationParamsCodec: const StandardMessageCodec(),
+      );
     }
+    return Text('$defaultTargetPlatform is not supported by this plugin');
+  }
+
+  void onPlatformViewCreated(int id) {
+    // REZOLVAT: Am pasat argumentele corecte si complete catre fiecare manager in parte
+    widget.onARViewCreated(
+      ARSessionManager(id, context, widget.planeDetectionConfig), // 3 argumente
+      ARObjectManager(id), // 1 argument
+      ARAnchorManager(id), // 1 argument
+      ARLocationManager(), // 0 argumente
+    );
   }
 }

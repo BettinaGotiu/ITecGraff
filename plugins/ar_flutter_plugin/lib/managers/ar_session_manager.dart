@@ -9,24 +9,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math_64.dart';
 
-// Type definitions to enforce a consistent use of the API
 typedef ARHitResultHandler = void Function(List<ARHitTestResult> hits);
 
-/// Manages the session configuration, parameters and events of an [ARView]
 class ARSessionManager {
-  /// Platform channel used for communication from and to [ARSessionManager]
   late MethodChannel _channel;
-
-  /// Debugging status flag. If true, all platform calls are printed. Defaults to false.
   final bool debug;
-
-  /// Context of the [ARView] widget that this manager is attributed to
   final BuildContext buildContext;
-
-  /// Determines the types of planes ARCore and ARKit should show
   final PlaneDetectionConfig planeDetectionConfig;
-
-  /// Receives hit results from user taps with tracked planes or feature points
   late ARHitResultHandler onPlaneOrPointTap;
 
   ARSessionManager(int id, this.buildContext, this.planeDetectionConfig,
@@ -38,7 +27,22 @@ class ARSessionManager {
     }
   }
 
-  /// Returns the camera pose in Matrix4 format with respect to the world coordinate system of the [ARView]
+  // ADAUGAT: Functie pentru a incarca imaginile tale din assets pentru a fi detectate
+  Future<void> addReferenceImage(
+      {required String name,
+      required String path,
+      required double physicalWidth}) async {
+    try {
+      await _channel.invokeMethod<void>('addReferenceImage', {
+        'name': name,
+        'path': path,
+        'physicalWidth': physicalWidth,
+      });
+    } catch (e) {
+      print("Error adding reference image: $e");
+    }
+  }
+
   Future<Matrix4?> getCameraPose() async {
     try {
       final serializedCameraPose =
@@ -50,7 +54,6 @@ class ARSessionManager {
     }
   }
 
-  /// Returns the given anchor pose in Matrix4 format with respect to the world coordinate system of the [ARView]
   Future<Matrix4?> getPose(ARAnchor anchor) async {
     try {
       if (anchor.name.isEmpty) {
@@ -67,7 +70,6 @@ class ARSessionManager {
     }
   }
 
-  /// Returns the distance in meters between @anchor1 and @anchor2.
   Future<double?> getDistanceBetweenAnchors(
       ARAnchor anchor1, ARAnchor anchor2) async {
     var anchor1Pose = await getPose(anchor1);
@@ -81,7 +83,6 @@ class ARSessionManager {
     }
   }
 
-  /// Returns the distance in meters between @anchor and device's camera.
   Future<double?> getDistanceFromAnchor(ARAnchor anchor) async {
     Matrix4? cameraPose = await getCameraPose();
     Matrix4? anchorPose = await getPose(anchor);
@@ -94,7 +95,6 @@ class ARSessionManager {
     }
   }
 
-  /// Returns the distance in meters between @vector1 and @vector2.
   double getDistanceBetweenVectors(Vector3 vector1, Vector3 vector2) {
     num dx = vector1.x - vector2.x;
     num dy = vector1.y - vector2.y;
@@ -142,9 +142,6 @@ class ARSessionManager {
     return Future.value();
   }
 
-  /// Function to initialize the platform-specific AR view. Can be used to initially set or update session settings.
-  /// [customPlaneTexturePath] refers to flutter assets from the app that is calling this function, NOT to assets within this plugin. Make sure
-  /// the assets are correctly registered in the pubspec.yaml of the parent app (e.g. the ./example app in this plugin's repo)
   onInitialize({
     bool showAnimatedGuide = true,
     bool showFeaturePoints = false,
@@ -152,8 +149,8 @@ class ARSessionManager {
     String? customPlaneTexturePath,
     bool showWorldOrigin = false,
     bool handleTaps = true,
-    bool handlePans = false, // nodes are not draggable by default
-    bool handleRotation = false, // nodes can not be rotated by default
+    bool handlePans = false,
+    bool handleRotation = false,
   }) {
     _channel.invokeMethod<void>('init', {
       'showAnimatedGuide': showAnimatedGuide,
@@ -168,7 +165,6 @@ class ARSessionManager {
     });
   }
 
-  /// Displays the [errorMessage] in a snackbar of the parent widget
   onError(String errorMessage) {
     ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
         content: Text(errorMessage),
@@ -178,8 +174,6 @@ class ARSessionManager {
                 ScaffoldMessenger.of(buildContext).hideCurrentSnackBar)));
   }
 
-  /// Dispose the AR view on the platforms to pause the scenes and disconnect the platform handlers.
-  /// You should call this before removing the AR view to prevent out of memory erros
   dispose() async {
     try {
       await _channel.invokeMethod<void>("dispose");
@@ -188,7 +182,6 @@ class ARSessionManager {
     }
   }
 
-  /// Returns a future ImageProvider that contains a screenshot of the current AR Scene
   Future<ImageProvider> snapshot() async {
     final result = await _channel.invokeMethod<Uint8List>('snapshot');
     return MemoryImage(result!);
