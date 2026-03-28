@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
 import 'package:flutter/material.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
+import '../services/poster_ml_recognizer.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stările ecranului (camera AR rămâne activă în toate stările)
@@ -36,6 +37,11 @@ class _ScanScreenState extends State<ScanScreen> {
   _AppState _state = _AppState.scanning;
   String _detectedName = '';
   ARImageAnchor? _anchor;
+
+  // ── ML recognizer ────────────────────────────────────────────────────────
+  final _mlRecognizer = PosterMlRecognizer();
+  bool _mlReady = false;
+  bool _mlScanning = false;
 
   // ── Canvas de desen ───────────────────────────────────────────────────────
   final List<List<Offset>> _lines = [];
@@ -92,6 +98,13 @@ class _ScanScreenState extends State<ScanScreen> {
     );
     _objectMgr!.onInitialize();
     _loadAllPosters();
+
+    // Inițializăm modelul ML în paralel cu sesiunea AR
+    _mlRecognizer.init().then((_) {
+      if (mounted) setState(() => _mlReady = true);
+    }).catchError((e) {
+      debugPrint('ML model init error: $e');
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -132,15 +145,17 @@ class _ScanScreenState extends State<ScanScreen> {
 
   // ── Intră în modul de desen în interiorul acestui ecran ─────────────────
   void _startDrawingHere() {
-    if (_anchor == null) return;
+    // Acceptăm intrarea în modul desen fie cu ancora AR, fie cu poziția estimată ML.
+    if (_anchor == null && _anchorWorldPos == null) return;
 
-    // Fixăm poziția mondială a ancorei (ARCore actualizează ancora intern,
-    // dar pentru vizualizare 2D ne este suficient să o citim o singură dată)
-    _anchorWorldPos = _anchor!.transformation.getTranslation().clone();
-
-    // Derivăm dimensiunile canvas-ului din dimensiunea fizică a posterului
-    _canvasW = (_anchor!.physicalSize.x * _kPxPerMeter).clamp(100.0, 600.0).toDouble();
-    _canvasH = (_anchor!.physicalSize.y * _kPxPerMeter).clamp(100.0, 800.0).toDouble();
+    if (_anchor != null) {
+      // Cale AR: folosim poziția și dimensiunile din ancora imaginii.
+      _anchorWorldPos = _anchor!.transformation.getTranslation().clone();
+      _canvasW = (_anchor!.physicalSize.x * _kPxPerMeter).clamp(100.0, 600.0).toDouble();
+      _canvasH = (_anchor!.physicalSize.y * _kPxPerMeter).clamp(100.0, 800.0).toDouble();
+    }
+    // Cale ML: _anchorWorldPos a fost deja setat de _onMlPosterDetected;
+    // folosim dimensiunile implicite (_canvasW=300, _canvasH=420).
 
     final sz = MediaQuery.of(context).size;
     setState(() {
@@ -200,6 +215,63 @@ class _ScanScreenState extends State<ScanScreen> {
       _anchorWorldPos = null;
       _lines.clear();
       _currentLine.clear();
+    });
+  }
+
+  // ── Identifică posterul folosind modelul ML pe snapshot-ul camerei AR ───
+  Future<void> _identifyWithMl() async {
+    if (_sessionMgr == null || !_mlReady || _mlScanning) return;
+    setState(() => _mlScanning = true);
+    try {
+      final imageProvider = await _sessionMgr!.snapshot();
+      if (imageProvider is! MemoryImage) {
+        throw StateError('Unexpected snapshot type: ${imageProvider.runtimeType}');
+      }
+      final match = await _mlRecognizer.match(imageProvider.bytes);
+      if (!mounted) return;
+      if (match != null) {
+        await _onMlPosterDetected(match.posterId);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Poster nerecunoscut. Îndreaptă camera direct spre poster și încearcă din nou.'),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('ML scan error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Eroare la identificare. Încearcă din nou.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _mlScanning = false);
+    }
+  }
+
+  // ── Handler pentru posterul identificat prin ML ──────────────────────────
+  Future<void> _onMlPosterDetected(String posterId) async {
+    // Estimăm poziția posterului la 0.6 m în fața camerei.
+    final camPose = await _sessionMgr?.getCameraPose();
+    if (camPose == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Camera AR nu e gata. Așteaptă o secundă și încearcă din nou.'),
+          ),
+        );
+      }
+      return;
+    }
+    final camPos = camPose.getTranslation();
+    final camRot = camPose.getRotation();
+    // Vector înainte în spațiul camerei (-Z), transformat în spațiu mondial
+    _anchorWorldPos = camPos + camRot * vector.Vector3(0.0, 0.0, -0.6);
+    if (!mounted) return;
+    setState(() {
+      _detectedName = posterId;
+      _state = _AppState.popup;
     });
   }
 
@@ -294,6 +366,32 @@ class _ScanScreenState extends State<ScanScreen> {
           ),
         ),
         const Spacer(),
+        // Buton identificare ML
+        if (_mlReady)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(50),
+              ),
+              icon: _mlScanning
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.camera_alt),
+              label: Text(
+                _mlScanning ? 'Se identifică...' : 'Identifică cu AI',
+              ),
+              onPressed: _mlScanning ? null : _identifyWithMl,
+            ),
+          ),
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
           padding:
