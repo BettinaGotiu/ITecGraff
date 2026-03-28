@@ -12,14 +12,14 @@ class FriendRequestsWidget extends StatelessWidget {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Cereri de prietenie'),
+          title: const Text('Friend Requests'),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
           content: requestIds.isEmpty
               ? const Padding(
                   padding: EdgeInsets.all(16.0),
-                  child: Text("Nu ai nicio cerere nouă de prietenie."),
+                  child: Text("You have no new friend requests."),
                 )
               : SizedBox(
                   width: double.maxFinite,
@@ -29,7 +29,7 @@ class FriendRequestsWidget extends StatelessWidget {
                     itemBuilder: (context, index) {
                       String senderId = requestIds[index];
 
-                      // Fetch datele utilizatorului care a trimis cererea
+                      // Extragem documentul cu informatiile utilizatorului din Firestore
                       return FutureBuilder<DocumentSnapshot>(
                         future: FirebaseFirestore.instance
                             .collection('users')
@@ -37,24 +37,46 @@ class FriendRequestsWidget extends StatelessWidget {
                             .get(),
                         builder: (context, snapshot) {
                           if (!snapshot.hasData) {
-                            return const ListTile(title: Text("Se încarcă..."));
+                            return const ListTile(title: Text("Loading..."));
                           }
 
                           var data =
                               snapshot.data!.data() as Map<String, dynamic>?;
-                          String username =
-                              data?['username'] ?? 'Utilizator Necunoscut';
+
+                          // Extragem valorile cu fallback-uri in caz ca nu exista
+                          String username = data?['username'] ?? 'Unknown User';
+                          String email = data?['email'] ?? 'No email';
+                          String? photoUrl =
+                              data?['profilePhoto'] ?? data?['photoUrl'];
 
                           return ListTile(
-                            leading: const CircleAvatar(
+                            leading: CircleAvatar(
                               backgroundColor: Colors.blueAccent,
-                              child: Icon(Icons.person, color: Colors.white),
+                              backgroundImage:
+                                  photoUrl != null && photoUrl.isNotEmpty
+                                  ? NetworkImage(photoUrl)
+                                  : null,
+                              child: photoUrl == null || photoUrl.isEmpty
+                                  ? const Icon(
+                                      Icons.person,
+                                      color: Colors.white,
+                                    )
+                                  : null,
                             ),
-                            title: Text(username),
+                            title: Text(
+                              username,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              email,
+                              style: const TextStyle(fontSize: 12),
+                            ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // Buton Decline (X Roșu)
+                                // Decline Button
                                 IconButton(
                                   icon: const Icon(
                                     Icons.close,
@@ -64,11 +86,10 @@ class FriendRequestsWidget extends StatelessWidget {
                                     await friendsService.declineFriendRequest(
                                       senderId,
                                     );
-                                    // Închidem pop-up-ul ca să facă refresh streamul
                                     if (context.mounted) Navigator.pop(context);
                                   },
                                 ),
-                                // Buton Accept (V Verde)
+                                // Accept Button
                                 IconButton(
                                   icon: const Icon(
                                     Icons.check,
@@ -92,7 +113,7 @@ class FriendRequestsWidget extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Închide'),
+              child: const Text('Close'),
             ),
           ],
         );
@@ -108,12 +129,11 @@ class FriendRequestsWidget extends StatelessWidget {
     if (currentId == null) return const SizedBox();
 
     return StreamBuilder<DocumentSnapshot>(
-      // Ascultăm schimbările documentului tău din Firestore
       stream: friendsService.getUserData(currentId),
       builder: (context, snapshot) {
         if (!snapshot.hasData || !snapshot.data!.exists) {
           return IconButton(
-            icon: const Icon(Icons.notifications_none, color: Colors.black),
+            icon: const Icon(Icons.notifications_none, color: Colors.white),
             onPressed: () => _showRequestsDialog(context, []),
           );
         }
@@ -129,11 +149,11 @@ class FriendRequestsWidget extends StatelessWidget {
                 requests.isNotEmpty
                     ? Icons.notifications_active
                     : Icons.notifications_none,
-                color: requests.isNotEmpty ? Colors.blueAccent : Colors.black,
+                color: Colors.white,
+                size: 28,
               ),
               onPressed: () => _showRequestsDialog(context, requests),
             ),
-            // Bulină Roșie cu numărul de cereri
             if (requests.isNotEmpty)
               Positioned(
                 right: 8,

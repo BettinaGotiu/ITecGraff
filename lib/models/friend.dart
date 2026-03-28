@@ -1,23 +1,22 @@
 class Friend {
-  const Friend({
-    required this.uid,
-    required this.username,
-    required this.email,
-  });
-
   final String uid;
   final String username;
   final String email;
+  final String profilePic;
 
-  factory Friend.fromJson(Map<String, dynamic> json) => Friend(
-        uid: json['uid'] as String,
-        username: (json['username'] as String?) ?? 'Unknown',
-        email: (json['email'] as String?) ?? '',
-      );
+  Friend({
+    required this.uid,
+    required this.username,
+    required this.email,
+    this.profilePic = 'assets/profile_pics/avatar1.png',
+  });
 
-  Map<String, dynamic> toJson() => {
-        'uid': uid,
-        'username': username,
-        'email': email,
-      };
+  factory Friend.fromJson(Map<String, dynamic> json) {
+    return Friend(
+      uid: json['uid'] ?? '',
+      username: json['username'] ?? 'Unknown',
+      email: json['email'] ?? '',
+      profilePic: json['profilePic'] ?? 'assets/profile_pics/avatar1.png',
+    );
+  }
 }
