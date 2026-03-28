@@ -43,6 +43,22 @@ class ARSessionManager {
     }
   }
 
+  /// Adaugă o listă întreagă de imagini de referință într-un singur apel (mai eficient decât
+  /// mai multe apeluri [addReferenceImage] succesive, deoarece sesiunea ARCore este configurată
+  /// o singură dată).
+  ///
+  /// [images] – lista de map-uri cu cheile `name`, `path` și `physicalWidth`.
+  Future<void> addAllReferenceImages(
+      List<Map<String, dynamic>> images) async {
+    try {
+      await _channel.invokeMethod<void>('addAllReferenceImages', {
+        'images': images,
+      });
+    } catch (e) {
+      print('Error adding all reference images: $e');
+    }
+  }
+
   Future<List<ARHitTestResult>> raycast(Size screenSize, Offset localPosition, Offset globalPosition) async {
     try {
       final rawResults = await _channel.invokeMethod<List<dynamic>>('raycast', {
