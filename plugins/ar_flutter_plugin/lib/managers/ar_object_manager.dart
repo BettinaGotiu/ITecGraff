@@ -23,10 +23,16 @@ class ARObjectManager {
           'transformation': const MatrixConverter().toJson(node.transform)
         });
       });
-      // Am schimbat planeAnchor cu parentAnchor ca sa suportam si ImageAnchor
-      bool? didAddNode = await _channel.invokeMethod<bool>('addNode', {
-        'dict': node.toMap(),
-      });
+      bool? didAddNode;
+      if (parentAnchor != null) {
+        didAddNode = await _channel.invokeMethod<bool>('addNodeToPlaneAnchor', {
+          'node': node.toMap(),
+          'anchor': parentAnchor.toJson(),
+        });
+      } else {
+        // Fallback for nodes without anchors (uses origin)
+        didAddNode = await _channel.invokeMethod<bool>('addNode', node.toMap()); // Native expects call.arguments directly
+      }
       return didAddNode;
     } on PlatformException catch (e) {
       print('Error adding node: $e');

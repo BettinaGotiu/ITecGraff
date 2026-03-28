@@ -21,7 +21,6 @@ subprojects {
 }
 subprojects { project.evaluationDependsOn(":app") }
 
-// ✅ fixează namespace + compileSdk pentru ar_flutter_plugin fără afterEvaluate
 subprojects {
     plugins.withId("com.android.library") {
         if (name.contains("ar_flutter_plugin")) {

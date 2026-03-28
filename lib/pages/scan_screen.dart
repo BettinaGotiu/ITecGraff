@@ -69,26 +69,14 @@ class _ScanScreenState extends State<ScanScreen> {
   Future<void> _loadReferenceImages() async {
     // Adăugăm posterele în baza de date AR
     await arSessionManager?.addReferenceImage(
-      name: "room_1",
-      path: "assets/images/poster1.jpg",
-      physicalWidth: 0.5,
-    );
-
-    await arSessionManager?.addReferenceImage(
-      name: "room_2",
-      path: "assets/images/poster2.jpg",
-      physicalWidth: 0.5,
-    );
-
-    await arSessionManager?.addReferenceImage(
-      name: "room_cola",
-      path: "assets/images/poster_cola.jpg",
+      name: "afis1",
+      path: "assets/posters/afis1.png",
       physicalWidth: 0.5,
     );
 
     await arSessionManager?.addReferenceImage(
       name: "afis12",
-      path: "assets/images/afis12.png",
+      path: "assets/posters/afis12.png",
       physicalWidth: 0.4,
     );
 
@@ -107,9 +95,7 @@ class _ScanScreenState extends State<ScanScreen> {
   // Logica de detectare a imaginii
   void onImageDetected(ARImageAnchor anchor) {
     String roomName = "Unknown Room";
-    if (anchor.referenceImageName == "room_1") roomName = "Camera Principală";
-    if (anchor.referenceImageName == "room_2") roomName = "Camera Secundară";
-    if (anchor.referenceImageName == "room_cola") roomName = "Camera Cola";
+    if (anchor.referenceImageName == "afis1") roomName = "Camera Principală";
     if (anchor.referenceImageName == "afis12") roomName = "Camera Afiș 12";
 
     setState(() {
@@ -124,23 +110,31 @@ class _ScanScreenState extends State<ScanScreen> {
     if (_currentState != AppState.drawing || _activePosterAnchor == null)
       return;
 
-    // Aici se face hit-test-ul 2D la 3D
-    // Exemplu conceptual de implementare folosind un raycast
-    /*
-    var hits = await arSessionManager?.raycast(details.localPosition);
+    var hits = await arSessionManager?.raycast(context.size!, details.localPosition, details.localPosition);
     if (hits != null && hits.isNotEmpty) {
        var firstHit = hits.first;
        
-       var drawNode = ARNode(
-           type: NodeType.flutterWidget, // Sau localGLTF2 cu o sfera
-           position: firstHit.worldTransform.getTranslation(),
-           scale: vector.Vector3(0.02, 0.02, 0.02),
-       );
+       vector.Matrix4 hitTransform = firstHit.worldTransform;
+       vector.Vector3 worldPos = hitTransform.getTranslation();
 
-       // ANCORĂM NODUL DIRECT PE POSTER (ARImageAnchor)
-       arObjectManager?.addNode(drawNode, parentAnchor: _activePosterAnchor);
+       vector.Matrix4 inversePosterTransform = vector.Matrix4.copy(_activePosterAnchor!.transformation);
+       inversePosterTransform.invert();
+       vector.Vector3 localPos = inversePosterTransform.transform3(worldPos);
+
+       double halfWidth = _activePosterAnchor!.physicalSize.x / 2.0;
+       double halfHeight = _activePosterAnchor!.physicalSize.y / 2.0;
+
+       if (localPos.x.abs() <= halfWidth && localPos.z.abs() <= halfHeight) {
+           var drawNode = ARNode(
+               type: NodeType.localGLTF2,
+               uri: "assets/models/cube.glb", 
+               position: localPos, 
+               scale: vector.Vector3(0.01, 0.01, 0.01),
+           );
+
+           arObjectManager?.addNode(drawNode, parentAnchor: _activePosterAnchor);
+       }
     }
-    */
   }
 
   @override

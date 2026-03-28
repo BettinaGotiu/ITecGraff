@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -22,6 +23,7 @@ import io.carius.lars.ar_flutter_plugin.Serialization.deserializeMatrix4
 import io.carius.lars.ar_flutter_plugin.Serialization.serializeAnchor
 import io.carius.lars.ar_flutter_plugin.Serialization.serializeHitResult
 import io.carius.lars.ar_flutter_plugin.Serialization.serializePose
+import io.carius.lars.ar_flutter_plugin.Serialization.serializeImageAnchor
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.loader.FlutterLoader
 import io.flutter.plugin.common.BinaryMessenger
@@ -99,6 +101,48 @@ internal class AndroidARView(
                     when (call.method) {
                         "init" -> {
                             initializeARView(call, result)
+                        }
+                        "addReferenceImage" -> {
+                            try {
+                                val name = call.argument<String>("name")!!
+                                val path = call.argument<String>("path")!!
+                                val physicalWidth = call.argument<Double>("physicalWidth")?.toFloat() // Can be null if size omitted
+
+                                val config = arSceneView.session!!.config
+                                var db = config.augmentedImageDatabase
+                                if (db == null) {
+                                    db = AugmentedImageDatabase(arSceneView.session)
+                                }
+
+                                val loader = FlutterInjector.instance().flutterLoader()
+                                val key = loader.getLookupKeyForAsset(path)
+                                val inputStream = viewContext.assets.open(key)
+                                val bitmap = BitmapFactory.decodeStream(inputStream)
+
+                                if (physicalWidth != null && physicalWidth > 0f) {
+                                    db.addImage(name, bitmap, physicalWidth)
+                                } else {
+                                    db.addImage(name, bitmap)
+                                }
+
+                                config.augmentedImageDatabase = db
+                                
+                                // AugmentedImageDatabase changes require the session to be paused
+                                arSceneView.pause()
+                                arSceneView.session!!.configure(config)
+                                arSceneView.resume()
+                                
+                                result.success(null)
+                            } catch (e: Exception) {
+                                result.error("e", "Failed to add reference image: ${e.message}", e.stackTrace)
+                            }
+                        }
+                        "raycast" -> {
+                            val x = call.argument<Double>("x")?.toFloat() ?: 0f
+                            val y = call.argument<Double>("y")?.toFloat() ?: 0f
+                            val hitResults = arSceneView.arFrame?.hitTest(x, y) ?: emptyList<HitResult>()
+                            val serializedResults = hitResults.map { serializeHitResult(it) }
+                            result.success(serializedResults)
                         }
                         "getAnchorPose" -> {
                             val anchorNode = arSceneView.scene.findByName(call.argument("anchorId")) as AnchorNode?
@@ -643,6 +687,30 @@ internal class AndroidARView(
         val updatedAnchors = arSceneView.arFrame!!.updatedAnchors
         // Notify the cloudManager of all the updates.
         if (this::cloudAnchorHandler.isInitialized) {cloudAnchorHandler.onUpdate(updatedAnchors)}
+
+        // Augmented Image Tracking
+        val updatedImages = arSceneView.arFrame?.getUpdatedTrackables(AugmentedImage::class.java)
+        updatedImages?.forEach { image ->
+            if (image.trackingState == TrackingState.TRACKING) {
+                // Determine if we already created an AnchorNode for this image
+                val existingAnchorNode = arSceneView.scene.findByName(image.name) as AnchorNode?
+                if (existingAnchorNode == null) {
+                    // Create Anchor mapping automatically bound to the image's center
+                    val anchor = image.createAnchor(image.centerPose)
+                    val anchorNode = AnchorNode(anchor)
+                    anchorNode.name = image.name
+                    anchorNode.setParent(arSceneView.scene)
+
+                    // Notify Flutter
+                    val serializedAnchor = serializeImageAnchor(anchorNode, anchor, image)
+                    anchorManagerChannel.invokeMethod("onAnchorDownloadSuccess", serializedAnchor, object: MethodChannel.Result {
+                        override fun success(result: Any?) { }
+                        override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {}
+                        override fun notImplemented() {}
+                    })
+                }
+            }
+        }
 
         if (keepNodeSelected && transformationSystem.selectedNode != null && transformationSystem.selectedNode!!.isTransforming){
             // If the selected node is currently transforming, we want to deselect it as soon as the transformation is done

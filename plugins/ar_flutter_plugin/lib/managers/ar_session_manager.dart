@@ -43,6 +43,22 @@ class ARSessionManager {
     }
   }
 
+  Future<List<ARHitTestResult>> raycast(Size screenSize, Offset localPosition, Offset globalPosition) async {
+    try {
+      final rawResults = await _channel.invokeMethod<List<dynamic>>('raycast', {
+        'x': localPosition.dx,
+        'y': localPosition.dy,
+      });
+      if (rawResults == null) return [];
+      
+      final serializedHitTestResults = rawResults.map((e) => Map<String, dynamic>.from(e)).toList();
+      return serializedHitTestResults.map((e) => ARHitTestResult.fromJson(e)).toList();
+    } catch (e) {
+      print('Error in raycast: $e');
+      return [];
+    }
+  }
+
   Future<Matrix4?> getCameraPose() async {
     try {
       final serializedCameraPose =

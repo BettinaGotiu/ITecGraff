@@ -57,6 +57,18 @@ fun serializePoseWithScale(pose: Pose, scale: Vector3): DoubleArray {
     return serializedPoseDouble
 }
 
+fun serializeImageAnchor(anchorNode: AnchorNode, anchor: Anchor?, image: AugmentedImage): HashMap<String, Any?> {
+    val serializedAnchor = HashMap<String, Any?>()
+    serializedAnchor["type"] = 1 // index for ARImageAnchor
+    serializedAnchor["name"] = anchorNode.name
+    serializedAnchor["referenceImageName"] = image.name
+    serializedAnchor["physicalWidth"] = image.extentX
+    serializedAnchor["physicalHeight"] = image.extentZ
+    serializedAnchor["transformation"] = if (anchor != null) serializePose(anchor.pose) else null
+    serializedAnchor["childNodes"] = anchorNode.children.map { child -> child.name }
+    return serializedAnchor
+}
+
 fun serializeAnchor(anchorNode: AnchorNode, anchor: Anchor?): HashMap<String, Any?> {
     val serializedAnchor = HashMap<String, Any?>()
     serializedAnchor["type"] = 0 // index for plane anchors
