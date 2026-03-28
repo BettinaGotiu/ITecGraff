@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
 import 'package:flutter/material.dart';
-import 'package:vector_math/vector_math_64.dart' as vector;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stările ecranului (camera AR rămâne activă în toate stările)
@@ -13,12 +12,11 @@ enum _AppState { scanning, popup, drawing }
 ///
 /// Flux:
 ///  1. Camera AR se deschide și caută oricare din cele 13 postere.
-///  2. La detecție: pop-up cu două opțiuni:
-///     - "Desenează aici" – rămâne pe acest ecran cu un canvas 2D ancorat pe poster.
-///     - "Mergi la Canvas" – returnează ID-ul posterului la HomeScreen, care va
-///       deschide ARCanvasScreen cu sesiune nouă.
+///  2. La detecție: pop-up cu o singură opțiune "Mergi la Canvas" care activează
+///     modul de desen direct pe acest ecran (fără a naviga la un nou ecran).
 ///  3. Modul de desen: canvas 2D urmărește posterul în spațiu 3D prin polling
-///     al pose-ului camerei la 30 FPS.
+///     al pose-ului ancorei la ~30 FPS. Canvas-ul este ascuns dacă posterul
+///     iese din câmpul vizual.
 class ScanScreen extends StatefulWidget {
   const ScanScreen({Key? key}) : super(key: key);
 
@@ -26,7 +24,8 @@ class ScanScreen extends StatefulWidget {
   _ScanScreenState createState() => _ScanScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> {
+class _ScanScreenState extends State<ScanScreen>
+    with SingleTickerProviderStateMixin {
   // ── Manageri AR ──────────────────────────────────────────────────────────
   ARSessionManager? _sessionMgr;
   ARObjectManager? _objectMgr;
@@ -45,6 +44,9 @@ class _ScanScreenState extends State<ScanScreen> {
   double _cy = 0; // centrul canvas-ului pe ecran (Y)
   double _scale = 1.0;
 
+  /// Vizibilitate poster: canvas apare doar când posterul este în câmpul vizual
+  bool _posterVisible = false;
+
   /// Dimensiunile canvas-ului în pixeli virtuali (derivate din dimensiunea fizică a posterului)
   double _canvasW = 300.0;
   double _canvasH = 420.0;
@@ -52,8 +54,6 @@ class _ScanScreenState extends State<ScanScreen> {
   /// Factorul de conversie pixeli/metru folosit la derivarea dimensiunii canvas-ului
   static const double _kPxPerMeter = 1000.0;
 
-  /// Poziție mondială fixă a ancorei, capturată la momentul detecției
-  vector.Vector3? _anchorWorldPos;
   Timer? _trackingTimer;
 
   // Tangenta semi-unghiului de câmp vizual (FOV) pentru o cameră mobilă tipică.
@@ -62,11 +62,39 @@ class _ScanScreenState extends State<ScanScreen> {
   static const double _kTanHalfFovH = 0.637;
   static const double _kTanHalfFovV = 0.466;
 
+  /// Proporție A4 (√2 ≈ 1.414) – fallback dacă ARCore nu raportează înălțimea
+  static const double _kA4AspectRatio = 1.414;
+
+  /// Marginea (în pixeli) față de marginea ecranului dincolo de care canvas-ul
+  /// este considerat „în afara câmpului vizual" și este ascuns.
+  static const double _kOffscreenMargin = 200.0;
+
+  /// Dimensiunile colțurilor decorative ale cadrului de scanare.
+  static const double _kCornerBracketSize = 28.0;
+  static const double _kCornerBracketThickness = 3.5;
+
+  // ── Animație scanare ──────────────────────────────────────────────────────
+  late AnimationController _scanAnimCtrl;
+  late Animation<double> _scanAnim;
+
   // ──────────────────────────────────────────────────────────────────────────
+  @override
+  void initState() {
+    super.initState();
+    _scanAnimCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _scanAnim = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _scanAnimCtrl, curve: Curves.easeInOut),
+    );
+  }
+
   @override
   void dispose() {
     _trackingTimer?.cancel();
     _sessionMgr?.dispose();
+    _scanAnimCtrl.dispose();
     super.dispose();
   }
 
@@ -134,17 +162,19 @@ class _ScanScreenState extends State<ScanScreen> {
   void _startDrawingHere() {
     if (_anchor == null) return;
 
-    // Fixăm poziția mondială a ancorei (ARCore actualizează ancora intern,
-    // dar pentru vizualizare 2D ne este suficient să o citim o singură dată)
-    _anchorWorldPos = _anchor!.transformation.getTranslation().clone();
-
     // Derivăm dimensiunile canvas-ului din dimensiunea fizică a posterului
-    _canvasW = (_anchor!.physicalSize.x * _kPxPerMeter).clamp(100.0, 600.0).toDouble();
-    _canvasH = (_anchor!.physicalSize.y * _kPxPerMeter).clamp(100.0, 800.0).toDouble();
+    // cu fallback la 30cm lățime și proporție A4 dacă nu e raportată dimensiunea
+    final physW =
+        _anchor!.physicalSize.x > 0 ? _anchor!.physicalSize.x : 0.30;
+    final physH =
+        _anchor!.physicalSize.y > 0 ? _anchor!.physicalSize.y : physW * _kA4AspectRatio;
+    _canvasW = (physW * _kPxPerMeter).clamp(150.0, 600.0).toDouble();
+    _canvasH = (physH * _kPxPerMeter).clamp(150.0, 800.0).toDouble();
 
     final sz = MediaQuery.of(context).size;
     setState(() {
       _state = _AppState.drawing;
+      _posterVisible = false;
       _cx = sz.width / 2;
       _cy = sz.height / 2;
       _scale = 1.0;
@@ -156,36 +186,62 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  // ── Actualizăm poziția/scala canvas-ului pe baza pose-ului camerei ───────
+  // ── Actualizăm poziția/scala canvas-ului folosind pose-ul live al ancorei ─
   Future<void> _updateCanvas() async {
-    if (_anchorWorldPos == null || _sessionMgr == null || !mounted) return;
+    if (_anchor == null || _sessionMgr == null || !mounted) return;
+
+    // Obținem pose-ul curent al ancorei direct din ARCore (tracking live)
+    final anchorPose = await _sessionMgr!.getPose(_anchor!);
+    if (anchorPose == null || !mounted) return;
 
     final camPose = await _sessionMgr!.getCameraPose();
     if (camPose == null || !mounted) return;
 
+    final anchorPos = anchorPose.getTranslation();
     final camPos = camPose.getTranslation();
     final camRot = camPose.getRotation();
 
     // Vectorul cameră → ancoră, transformat în spațiul camerei
-    final diff = _anchorWorldPos! - camPos;
+    final diff = anchorPos - camPos;
     final diffCam = camRot.transposed() * diff;
 
-    if (diffCam.z >= 0) return; // ancora e în spatele camerei
+    if (diffCam.z >= 0) {
+      // Ancora e în spatele camerei – ascundem canvas-ul
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
 
     final depth = -diffCam.z;
-
     final sz = MediaQuery.of(context).size;
+
     final screenX =
         sz.width / 2 + (diffCam.x / depth) / _kTanHalfFovH * (sz.width / 2);
     final screenY =
         sz.height / 2 - (diffCam.y / depth) / _kTanHalfFovV * (sz.height / 2);
-    final scale = (0.5 / depth).clamp(0.15, 4.0).toDouble();
+
+    // Ascundem canvas-ul dacă posterul a ieșit complet din câmpul vizual
+    if (screenX < -_kOffscreenMargin ||
+        screenX > sz.width + _kOffscreenMargin ||
+        screenY < -_kOffscreenMargin ||
+        screenY > sz.height + _kOffscreenMargin) {
+      if (mounted) setState(() => _posterVisible = false);
+      return;
+    }
+
+    // Scala corectă: canvas-ul acoperă exact dimensiunea fizică a posterului.
+    // physW se simplifică (canvasW = physW * kPxPerMeter), deci:
+    //   scale = screenWidth / (2 * depth * tanHalfFovH * kPxPerMeter)
+    final scale =
+        (sz.width / (2.0 * depth * _kTanHalfFovH * _kPxPerMeter))
+            .clamp(0.05, 8.0)
+            .toDouble();
 
     if (mounted) {
       setState(() {
         _cx = screenX;
         _cy = screenY;
         _scale = scale;
+        _posterVisible = true;
       });
     }
   }
@@ -197,7 +253,7 @@ class _ScanScreenState extends State<ScanScreen> {
     setState(() {
       _state = _AppState.scanning;
       _anchor = null;
-      _anchorWorldPos = null;
+      _posterVisible = false;
       _lines.clear();
       _currentLine.clear();
     });
@@ -215,8 +271,8 @@ class _ScanScreenState extends State<ScanScreen> {
             planeDetectionConfig: PlaneDetectionConfig.none,
           ),
 
-          // 2. Canvas de desen (vizibil doar în modul drawing)
-          if (_state == _AppState.drawing) _buildCanvas(),
+          // 2. Canvas de desen (vizibil doar în modul drawing ȘI posterul e în câmp)
+          if (_state == _AppState.drawing && _posterVisible) _buildCanvas(),
 
           // 3. UI suprapus
           _buildOverlay(),
@@ -281,42 +337,112 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Widget _scanningOverlay() {
-    return Column(
+    return Stack(
       children: [
+        // Buton de navigare înapoi
         SafeArea(
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
           ),
         ),
-        const Spacer(),
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.65),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.crop_free, color: Colors.white70, size: 28),
-              SizedBox(width: 12),
-              Flexible(
-                child: Text(
-                  'Îndreaptă camera spre un poster...',
-                  style: TextStyle(color: Colors.white, fontSize: 16),
+
+        // Cadru de scanare animat (pulsează pentru a indica activitate)
+        Center(
+          child: AnimatedBuilder(
+            animation: _scanAnim,
+            builder: (context, child) {
+              return Container(
+                width: 230,
+                height: 300,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Colors.white.withOpacity(_scanAnim.value),
+                    width: 2.5,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
                 ),
+                child: Stack(
+                  children: [
+                    _cornerBracket(Alignment.topLeft),
+                    _cornerBracket(Alignment.topRight),
+                    _cornerBracket(Alignment.bottomLeft),
+                    _cornerBracket(Alignment.bottomRight),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+
+        // Banner de informare la baza ecranului
+        Positioned(
+          bottom: 48,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.65),
+                borderRadius: BorderRadius.circular(18),
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedBuilder(
+                    animation: _scanAnim,
+                    builder: (_, child) => Opacity(
+                      opacity: _scanAnim.value,
+                      child: child,
+                    ),
+                    child: const Icon(Icons.crop_free,
+                        color: Colors.white70, size: 26),
+                  ),
+                  const SizedBox(width: 10),
+                  const Flexible(
+                    child: Text(
+                      'Se scanează... Îndreaptă camera spre un poster',
+                      style: TextStyle(color: Colors.white, fontSize: 15),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  /// Colț decorativ al cadrului de scanare.
+  Widget _cornerBracket(Alignment alignment) {
+    final isLeft = alignment == Alignment.topLeft ||
+        alignment == Alignment.bottomLeft;
+    final isTop =
+        alignment == Alignment.topLeft || alignment == Alignment.topRight;
+    return Positioned(
+      left: isLeft ? 0 : null,
+      right: isLeft ? null : 0,
+      top: isTop ? 0 : null,
+      bottom: isTop ? null : 0,
+      child: AnimatedBuilder(
+        animation: _scanAnim,
+        builder: (_, child) =>
+            Opacity(opacity: (_scanAnim.value * 0.5 + 0.5), child: child),
+        child: CustomPaint(
+          size: const Size(_kCornerBracketSize, _kCornerBracketSize),
+          painter: _CornerPainter(
+              isLeft: isLeft,
+              isTop: isTop,
+              thickness: _kCornerBracketThickness),
+        ),
+      ),
     );
   }
 
@@ -351,23 +477,15 @@ class _ScanScreenState extends State<ScanScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Opțiunea 1: desenează direct în acest ecran
+                    // Singura opțiune: deschide canvas-ul direct pe acest ecran
                     ElevatedButton.icon(
                       icon: const Icon(Icons.brush),
-                      label: const Text('Desenează aici'),
+                      label: const Text('Mergi la Canvas'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.deepPurple,
                         foregroundColor: Colors.white,
                       ),
                       onPressed: _startDrawingHere,
-                    ),
-                    const SizedBox(height: 10),
-                    // Opțiunea 2: returnează ID-ul la HomeScreen → ARCanvasScreen
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text('Mergi la Canvas'),
-                      onPressed: () =>
-                          Navigator.of(context).pop(_detectedName),
                     ),
                     const SizedBox(height: 10),
                     TextButton(
@@ -386,38 +504,110 @@ class _ScanScreenState extends State<ScanScreen> {
 
   Widget _drawingOverlay() {
     return SafeArea(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          IconButton(
-            icon: const Icon(Icons.close, color: Colors.white),
-            onPressed: _resetToScanning,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: _resetToScanning,
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.deepPurple.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  _detectedName,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                icon:
+                    const Icon(Icons.delete_outline, color: Colors.white),
+                onPressed: () => setState(() {
+                  _lines.clear();
+                  _currentLine.clear();
+                }),
+              ),
+            ],
           ),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.deepPurple.withOpacity(0.8),
-              borderRadius: BorderRadius.circular(20),
+          // Banner de avertizare dacă posterul nu mai e vizibil
+          if (!_posterVisible)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.visibility_off, color: Colors.white, size: 16),
+                  SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'Posterul nu este vizibil – îndreaptă camera spre el',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: Text(
-              _detectedName,
-              style: const TextStyle(
-                  color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-          ),
-          IconButton(
-            icon:
-                const Icon(Icons.delete_outline, color: Colors.white),
-            onPressed: () => setState(() {
-              _lines.clear();
-              _currentLine.clear();
-            }),
-          ),
         ],
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Desenează colțul cadrului de scanare (L-shape)
+// ─────────────────────────────────────────────────────────────────────────────
+class _CornerPainter extends CustomPainter {
+  final bool isLeft;
+  final bool isTop;
+  final double thickness;
+
+  const _CornerPainter({
+    required this.isLeft,
+    required this.isTop,
+    required this.thickness,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap.square
+      ..style = PaintingStyle.stroke;
+
+    final w = size.width;
+    final h = size.height;
+
+    // Linie orizontală
+    canvas.drawLine(
+      Offset(isLeft ? 0 : w, isTop ? 0 : h),
+      Offset(isLeft ? w : 0, isTop ? 0 : h),
+      paint,
+    );
+    // Linie verticală
+    canvas.drawLine(
+      Offset(isLeft ? 0 : w, isTop ? 0 : h),
+      Offset(isLeft ? 0 : w, isTop ? h : 0),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CornerPainter old) => false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
