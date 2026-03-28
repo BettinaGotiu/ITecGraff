@@ -7,48 +7,42 @@ class FriendsService {
 
   String? get currentUserId => _auth.currentUser?.uid;
 
-  Future<List<Map<String, dynamic>>> searchUsers(String query) async {
-    if (query.isEmpty) return [];
-
-    final usernameQuery = await _firestore
-        .collection('users')
-        .where('username', isGreaterThanOrEqualTo: query)
-        .where('username', isLessThanOrEqualTo: '$query\uf8ff')
-        .get();
-
-    return usernameQuery.docs
-        .map((doc) => {'id': doc.id, ...doc.data()})
-        .toList();
-  }
-
+  // Send request
   Future<void> sendFriendRequest(String targetUserId) async {
     if (currentUserId == null || currentUserId == targetUserId) return;
+
+    // Scrie in colectia corecta 'users' (NU 'user_data')
     final targetUserRef = _firestore.collection('users').doc(targetUserId);
-    await targetUserRef.update({
+
+    // Folosim set cu merge: true pentru a preveni erorile daca field-ul nu exista
+    await targetUserRef.set({
       'friendRequests': FieldValue.arrayUnion([currentUserId]),
-    });
+    }, SetOptions(merge: true));
   }
 
+  // Accept request
   Future<void> acceptFriendRequest(String senderId) async {
     if (currentUserId == null) return;
     final myRef = _firestore.collection('users').doc(currentUserId);
     final senderRef = _firestore.collection('users').doc(senderId);
 
     WriteBatch batch = _firestore.batch();
-    batch.update(myRef, {
+    batch.set(myRef, {
       'friendRequests': FieldValue.arrayRemove([senderId]),
       'friends': FieldValue.arrayUnion([senderId]),
-    });
-    batch.update(senderRef, {
+    }, SetOptions(merge: true));
+
+    batch.set(senderRef, {
       'friends': FieldValue.arrayUnion([currentUserId]),
-    });
+    }, SetOptions(merge: true));
+
     await batch.commit();
   }
 
+  // Decline request
   Future<void> declineFriendRequest(String senderId) async {
     if (currentUserId == null) return;
-    final myRef = _firestore.collection('users').doc(currentUserId);
-    await myRef.update({
+    await _firestore.collection('users').doc(currentUserId).update({
       'friendRequests': FieldValue.arrayRemove([senderId]),
     });
   }

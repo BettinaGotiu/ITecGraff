@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'ar_canvas_screen.dart'; // Folosim noul ecran AR
 import 'home_screen.dart';
 import 'friends_screen.dart';
 import 'settings_screen.dart';
+import 'teams_screen.dart'; // IMPORT NOU
+import 'game_room_screen.dart'; // IMPORT NOU
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -13,26 +14,25 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
-  String? _lastPosterId;
 
   @override
   Widget build(BuildContext context) {
-    // Aici se inițializează ecranele
     final pages = [
       HomeScreen(
         onPosterSelected: (id) {
-          setState(() {
-            _lastPosterId = id;
-            _index = 1; // Trecem automat la tab-ul de Canvas după ce a dat Join
-          });
+          // Deschidem Canvas-ul peste navbar, ca o pagină nouă
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => GameRoomScreen(
+                posterId: id,
+                imagePath: "assets/poster.jpg",
+              ), // Adaugă calea corectă pt imaginea ta
+            ),
+          );
         },
       ),
-      // Dacă avem un poster ID, deschidem AR, altfel arătăm un mesaj
-      _lastPosterId != null
-          ? ARCanvasScreen(roomId: _lastPosterId!)
-          : const Center(
-              child: Text("Scanează un poster prima dată din Home."),
-            ),
+      const TeamsScreen(), // ÎNLOCUIT AR CANVAS CU TEAMS SCREEN
       const FriendsScreen(),
       const SettingsScreen(),
     ];
@@ -45,14 +45,11 @@ class _AppShellState extends State<AppShell> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
           NavigationDestination(
-            icon: Icon(Icons.brush_outlined),
-            label: 'AR Canvas',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.group_outlined),
-            label: 'Friends',
-          ),
-          NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
+            icon: Icon(Icons.group_work),
+            label: 'Echipe',
+          ), // MODIFICAT
+          NavigationDestination(icon: Icon(Icons.person), label: 'Prieteni'),
+          NavigationDestination(icon: Icon(Icons.settings), label: 'Setări'),
         ],
       ),
     );

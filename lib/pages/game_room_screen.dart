@@ -60,12 +60,25 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
           .collection('users')
           .doc(user.uid)
           .get();
-      if (doc.exists) {
+
+      if (doc.exists && doc.data()!.containsKey('teamId')) {
         setState(() {
-          currentTeamId = doc.get('teamId') ?? 'pink';
+          currentTeamId = doc.get('teamId');
+          currentColor = doc.get('teamColor') ?? '#FF4081'; // Culoarea echipei
           currentUsername = doc.get('username') ?? 'Player';
-          currentLevel = doc.get('level') ?? 1; // Extragem și nivelul
+          currentLevel = doc.get('level') ?? 1;
         });
+      } else {
+        // Dacă nu are echipă, dăm pop și arătăm eroare
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Te rugăm să te alături unei echipe mai întâi (din meniul Echipe)!',
+            ),
+          ),
+        );
+        return;
       }
     }
 
@@ -189,15 +202,14 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
   }
 
   void _showGameResultDialog(Map<String, dynamic> result) {
-    // Extragem sigur valorile pentru a evita excepțiile Null
     String winnerTeam = result['winnerTeam'] ?? 'Egalitate';
 
-    // Verificăm scorul per echipă
+    // Extragem map-ul cu scorurile echipelor trimise de backend
     Map<String, dynamic> teamScores = result['teamScores'] != null
         ? Map<String, dynamic>.from(result['teamScores'])
-        : {'pink': 0, 'blue': 0};
+        : {};
 
-    // Verificăm XP-ul. Dacă e null, obținem 0.
+    // Extragem XP-ul câștigat de jucătorul curent
     int gainedXp = 0;
     if (result['xp'] != null) {
       gainedXp = result['xp'][currentUserId] ?? 0;
@@ -206,64 +218,117 @@ class _GameRoomScreenState extends State<GameRoomScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.emoji_events, color: Colors.amber, size: 30),
-            const SizedBox(width: 8),
-            Text(
-              "Echipa $winnerTeam a câștigat!",
-              style: const TextStyle(fontSize: 20),
-            ),
-          ],
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Scor Final Acoperire:",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              "💗 Pink Team: ${teamScores['pink'] ?? 0}%",
-              style: const TextStyle(color: Colors.pink),
-            ),
-            Text(
-              "🔵 Blue Team: ${teamScores['blue'] ?? 0}%",
-              style: const TextStyle(color: Colors.blue),
-            ),
-            const Divider(height: 30),
-            Center(
-              child: Text(
-                "+ $gainedXp XP",
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green,
+      builder: (_) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.emoji_events, color: Colors.amber, size: 30),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  winnerTeam == 'Egalitate'
+                      ? "Jocul s-a terminat la egalitate!"
+                      : "Echipa $winnerTeam a câștigat!",
+                  style: const TextStyle(fontSize: 20),
                 ),
+              ),
+            ],
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Scor Final Acoperire:",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+
+              // Generăm scorurile dinamic pentru FIECARE echipă din map-ul primit de la backend
+              if (teamScores.isNotEmpty)
+                ...teamScores.entries.map((entry) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6.0),
+                    child: Text(
+                      "• ${entry.key.toUpperCase()} Team: ${entry.value}%",
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  );
+                }).toList()
+              else
+                const Text("Nicio echipă nu a desenat."),
+
+              const Divider(height: 30),
+              Center(
+                child: Column(
+                  children: [
+                    const Text(
+                      "Ai câștigat",
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                    Text(
+                      "+ $gainedXp XP",
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actionsAlignment: MainAxisAlignment.spaceEvenly,
+          actions: [
+            TextButton(
+              onPressed: () {
+                // 1. Închidem popup-ul
+                Navigator.pop(context);
+
+                // 2. Resetăm state-ul vizual al tablei de desen a jucătorului
+                setState(() {
+                  localPoints.clear();
+                  remotePoints.clear();
+                  batchQueue.clear();
+                  _lastSentOffset = null;
+                  timeLeft = 60; // reset temporar UI până răspunde backend-ul
+                  currentCoverage = {};
+                });
+
+                // 3. Spunem backend-ului să inițieze/să ne bage în următorul joc
+                // Notă: connectAndRegister va refolosi conexiunea și va emite 'joinRoom' în backend
+                sm.connectAndRegister(
+                  currentUserId,
+                  currentUsername,
+                  currentTeamId,
+                  currentLevel,
+                  widget.posterId,
+                );
+              },
+              child: const Text("Joacă din nou"),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+              ),
+              onPressed: () {
+                // Dacă jucătorul iese din cameră
+                sm.leaveRoom(widget.posterId, currentUserId);
+                sm.socket?.disconnect();
+                Navigator.popUntil(context, (route) => route.isFirst);
+              },
+              child: const Text(
+                "Ieșire",
+                style: TextStyle(color: Colors.white),
               ),
             ),
           ],
-        ),
-        actionsAlignment: MainAxisAlignment.spaceEvenly,
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // Doar închidem pop-up-ul
-            },
-            child: const Text("Rămâi în cameră"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () =>
-                Navigator.popUntil(context, (route) => route.isFirst),
-            child: const Text("Ieșire", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 

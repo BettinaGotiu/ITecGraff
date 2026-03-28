@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:itec/services/friends_service.dart';
 
 import '../models/friend.dart';
 import '../widgets/app_button.dart';
@@ -78,31 +79,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Future<void> _sendRequest(Friend target) async {
-    final me = FirebaseAuth.instance.currentUser;
-    if (me == null) return;
-
-    final fromDoc = await FirebaseFirestore.instance
-        .collection('user_data')
-        .doc(me.uid)
-        .get();
-    final fromData = fromDoc.data() ?? <String, dynamic>{};
-
-    await FirebaseFirestore.instance
-        .collection('user_data')
-        .doc(target.uid)
-        .collection('friend_requests')
-        .doc(me.uid)
-        .set({
-          'fromUid': me.uid,
-          'fromUsername': fromData['username'] ?? me.displayName ?? 'Unknown',
-          'fromEmail': me.email ?? '',
-          'status': 'pending',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+    final friendsService = FriendsService();
+    await friendsService.sendFriendRequest(target.uid);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Friend request sent to ${target.username}')),
+      SnackBar(content: Text('Friend request sent to ${target.username}!')),
     );
   }
 

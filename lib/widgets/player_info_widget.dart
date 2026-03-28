@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/friends_service.dart';
 
 class PlayerInfoWidget extends StatelessWidget {
@@ -15,7 +16,7 @@ class PlayerInfoWidget extends StatelessWidget {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Jucători în cameră'),
+          title: const Text('Players in Room'),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
@@ -26,41 +27,80 @@ class PlayerInfoWidget extends StatelessWidget {
               itemCount: activePlayers.length,
               itemBuilder: (context, index) {
                 final player = activePlayers[index];
-                bool isMe = player['userId'] == myId;
+                final userId = player['userId'];
+                bool isMe = userId == myId;
 
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: player['teamId'] == 'pink'
-                        ? Colors.pinkAccent
-                        : Colors.blueAccent,
-                    child: const Icon(Icons.person, color: Colors.white),
-                  ),
-                  title: Text(player['username'] ?? 'Unknown'),
-                  subtitle: Text("Team: ${player['teamId']}"),
-                  trailing: isMe
-                      ? const Text(
-                          "Tu",
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        )
-                      : IconButton(
-                          icon: const Icon(
-                            Icons.person_add,
-                            color: Colors.deepPurple,
-                          ),
-                          onPressed: () {
-                            _friendsService.sendFriendRequest(player['userId']);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Cerere trimisă lui ${player['username']}',
-                                ),
+                return FutureBuilder<DocumentSnapshot>(
+                  future: FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(userId)
+                      .get(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const ListTile(title: Text("Loading..."));
+                    }
+
+                    var dbData = snapshot.data!.data() as Map<String, dynamic>?;
+
+                    String username =
+                        dbData?['username'] ?? player['username'] ?? 'Unknown';
+                    String email = dbData?['email'] ?? 'No email';
+                    String? photoUrl =
+                        dbData?['profilePhoto'] ?? dbData?['photoUrl'];
+
+                    // Extragem culoarea echipei (dacă nu are, fallback la gri)
+                    String hexColor = dbData?['teamColor'] ?? '#9E9E9E';
+                    Color teamColor = Color(
+                      int.parse("0xFF${hexColor.replaceAll('#', '')}"),
+                    );
+
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: teamColor,
+                        backgroundImage: photoUrl != null && photoUrl.isNotEmpty
+                            ? NetworkImage(photoUrl)
+                            : null,
+                        child: photoUrl == null || photoUrl.isEmpty
+                            ? const Icon(Icons.person, color: Colors.white)
+                            : null,
+                      ),
+                      title: Text(
+                        username,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(email, style: const TextStyle(fontSize: 12)),
+                          Text("Team: ${dbData?['teamId'] ?? 'None'}"),
+                        ],
+                      ),
+                      trailing: isMe
+                          ? const Text(
+                              "You",
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontWeight: FontWeight.bold,
                               ),
-                            );
-                          },
-                        ),
+                            )
+                          : IconButton(
+                              icon: const Icon(
+                                Icons.person_add,
+                                color: Colors.deepPurpleAccent,
+                              ),
+                              onPressed: () {
+                                _friendsService.sendFriendRequest(userId);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Friend request sent to $username',
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    );
+                  },
                 );
               },
             ),
@@ -68,7 +108,7 @@ class PlayerInfoWidget extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Închide'),
+              child: const Text('Close'),
             ),
           ],
         );
